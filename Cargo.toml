@@ -1,0 +1,15 @@
+[package]
+name = "l16-camera2"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Camera app for the Light L16 on Linux: a pro-camera instrument display"
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.10", features = ["v4_12"] }
+gst = { package = "gstreamer", version = "0.24" }
+pangocairo = "0.21"
+libc = "0.2"
+
+[profile.release]
+opt-level = 2

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <clipPath id="glass"><rect x="12.00" y="23.81" width="104.00" height="76.37" rx="4"/></clipPath>
+    <linearGradient id="gloss" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.35"/>
+      <stop offset="0.5" stop-color="#fff" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="8.00" y="24.81" width="112" height="84.37" rx="8" fill="#5e5c64"/>
+  <rect x="8.00" y="19.81" width="112" height="84.37" rx="8" fill="#9a9996"/>
+  <rect x="12.00" y="23.81" width="104.00" height="76.37" rx="4" fill="#241f31"/>
+  <circle cx="71.40" cy="41.73" r="9.90" fill="#3d3846"/>
+  <circle cx="71.40" cy="41.73" r="7.13" fill="#1c3a5e"/>
+  <circle cx="68.93" cy="39.25" r="1.78" fill="#fff" opacity="0.6"/>
+  <circle cx="101.57" cy="41.73" r="9.90" fill="#3d3846"/>
+  <circle cx="101.57" cy="41.73" r="7.13" fill="#1c3a5e"/>
+  <circle cx="99.10" cy="39.25" r="1.78" fill="#fff" opacity="0.6"/>
+  <circle cx="56.32" cy="62.00" r="9.90" fill="#3d3846"/>
+  <circle cx="56.32" cy="62.00" r="7.13" fill="#1c3a5e"/>
+  <circle cx="53.84" cy="59.52" r="1.78" fill="#fff" opacity="0.6"/>
+  <circle cx="86.49" cy="62.00" r="9.90" fill="#3d3846"/>
+  <circle cx="86.49" cy="62.00" r="7.13" fill="#1c3a5e"/>
+  <circle cx="84.01" cy="59.52" r="1.78" fill="#fff" opacity="0.6"/>
+  <circle cx="71.40" cy="82.27" r="9.90" fill="#3d3846"/>
+  <circle cx="71.40" cy="82.27" r="7.13" fill="#1c3a5e"/>
+  <circle cx="68.93" cy="79.80" r="1.78" fill="#fff" opacity="0.6"/>
+  <circle cx="101.57" cy="82.27" r="9.90" fill="#3d3846"/>
+  <circle cx="101.57" cy="82.27" r="7.13" fill="#1c3a5e"/>
+  <circle cx="99.10" cy="79.80" r="1.78" fill="#fff" opacity="0.6"/>
+  <g clip-path="url(#glass)">
+    <rect x="12.00" y="23.81" width="104.00" height="76.37" fill="url(#gloss)"/>
+    <polygon points="41.12,23.81 64.00,23.81 34.88,100.19 12.00,100.19" fill="#fff" opacity="0.12"/>
+  </g>
+</svg>

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Viewfinder 2
+Comment=Take photos with the Light L16's camera modules
+Exec=l16-camera2
+Icon=l16-camera2
+Categories=Graphics;Photography;
+X-Purism-FormFactor=Workstation;Mobile;
