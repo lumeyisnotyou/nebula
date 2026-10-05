@@ -138,7 +138,7 @@ pub fn spawn(on: Arc<AtomicBool>, blocked: Arc<AtomicU8>) {
         let Some(buses) = buses() else { return };
         let sensors: Vec<Option<Sensor>> = buses.iter().map(|&b| Sensor::open(b)).collect();
         if sensors.iter().all(Option::is_none) {
-            eprintln!("l16-camera2: proximity sensors: can't open their I2C buses");
+            eprintln!("nebula: proximity sensors: can't open their I2C buses");
             return;
         }
         loop {

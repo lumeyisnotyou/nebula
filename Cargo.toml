@@ -1,9 +1,9 @@
 [package]
-name = "l16-camera2"
+name = "nebula"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Camera app for the Light L16 on Linux: a pro-camera instrument display"
+description = "Nebula: a pro-camera instrument display for the Light L16"
 
 [dependencies]
 gtk = { package = "gtk4", version = "0.10", features = ["v4_12"] }

@@ -71,7 +71,7 @@ pub fn spawn(on: Arc<AtomicBool>, still: Arc<AtomicBool>, focal: Arc<AtomicU32>,
                 thread::sleep(Duration::from_millis(200));
             }
             if let Err(e) = enable(&sys, true) {
-                eprintln!("l16-camera2: gyro: {e}");
+                eprintln!("nebula: gyro: {e}");
                 return;
             }
             let Ok(mut f) = fs::File::open(&dev) else { return };
@@ -92,7 +92,7 @@ pub fn spawn(on: Arc<AtomicBool>, still: Arc<AtomicBool>, focal: Arc<AtomicU32>,
                 if unsafe { libc::poll(&mut pfd, 1, 1000) } <= 0 {
                     let off = fs::read_to_string(sys.join("buffer/enable")).map_or(true, |s| s.trim() != "1");
                     if off {
-                        eprintln!("l16-camera2: gyro: buffer found off, turning it on again");
+                        eprintln!("nebula: gyro: buffer found off, turning it on again");
                         let _ = set(sys.join("buffer/enable"), "1");
                     }
                     continue;
@@ -139,7 +139,7 @@ pub fn spawn(on: Arc<AtomicBool>, still: Arc<AtomicBool>, focal: Arc<AtomicU32>,
                     worst = worst.max(turn);
                     if shown.elapsed() >= Duration::from_secs(1) {
                         eprintln!(
-                            "l16-camera2: gyro: worst turn {:.3} mrad in 100 ms (limit {:.3} at {mm:.0} mm), still {}",
+                            "nebula: gyro: worst turn {:.3} mrad in 100 ms (limit {:.3} at {mm:.0} mm), still {}",
                             worst * 1e3,
                             limit * 1e3,
                             still.load(Ordering::Relaxed)

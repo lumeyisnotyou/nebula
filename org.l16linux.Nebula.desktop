@@ -2,7 +2,7 @@
 Type=Application
 Name=Nebula
 Comment=Take photos with the Light L16's camera modules
-Exec=l16-camera2
-Icon=l16-camera2
+Exec=nebula
+Icon=nebula
 Categories=Graphics;Photography;
 X-Purism-FormFactor=Workstation;Mobile;

@@ -86,7 +86,7 @@ impl Transfers {
                 while out.read_exact(&mut buf).is_ok() {
                     let mut q = queue.lock().unwrap();
                     let Some(i) = q.iter().position(|p| p.left[a] > 0) else {
-                        eprintln!("l16-camera2: ASIC{} record with no photo waiting, dropped", a + 1);
+                        eprintln!("nebula: ASIC{} record with no photo waiting, dropped", a + 1);
                         continue;
                     };
                     let ph = &mut q[i];
@@ -103,7 +103,7 @@ impl Transfers {
             });
             streams.push(child);
         }
-        eprintln!("l16-camera2: transfers started");
+        eprintln!("nebula: transfers started");
         Ok(Transfers { queue, streams })
     }
 
@@ -120,10 +120,10 @@ impl Transfers {
             .args(["-d", "/dev/media0", "-l", "\"msm_csid0\":1->\"msm_ispif1\":0[4]"])
             .output();
         match r {
-            Ok(o) if o.status.success() => eprintln!("l16-camera2: transfers stopped, ASIC1 link off"),
-            Ok(o) => eprintln!("l16-camera2: transfers stopped, ASIC1 link off failed: {}",
+            Ok(o) if o.status.success() => eprintln!("nebula: transfers stopped, ASIC1 link off"),
+            Ok(o) => eprintln!("nebula: transfers stopped, ASIC1 link off failed: {}",
                                String::from_utf8_lossy(&o.stderr).trim()),
-            Err(e) => eprintln!("l16-camera2: transfers stopped, media-ctl: {e}"),
+            Err(e) => eprintln!("nebula: transfers stopped, media-ctl: {e}"),
         }
     }
 }

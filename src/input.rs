@@ -37,14 +37,14 @@ fn find(name: &str) -> Option<String> {
 pub fn spawn(tx: Sender<Ev>) {
     for (name, strip) in [("gpio-keys", false), ("Light L16 touch strip", true)] {
         let Some(path) = find(name) else {
-            eprintln!("l16-camera2: no input device {name}");
+            eprintln!("nebula: no input device {name}");
             continue;
         };
         let tx = tx.clone();
         thread::spawn(move || {
             let mut f = match File::open(&path) {
                 Ok(f) => f,
-                Err(e) => return eprintln!("l16-camera2: {path}: {e}"),
+                Err(e) => return eprintln!("nebula: {path}: {e}"),
             };
             // struct input_event on 64-bit: timeval (16), type, code, value
             let mut buf = [0u8; 24];

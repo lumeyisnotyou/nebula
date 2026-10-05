@@ -2,7 +2,7 @@
 // - L16_DEMO=1: a drawn scene in place of the camera, so the app runs on a desktop without the
 //   hardware (the controls, the sensors and the driver are simply absent);
 // - screenshots of the window as GTK renders it: SIGUSR1 saves one to
-//   ~/.cache/l16-camera2-shot.png, and L16_SHOT=path takes one a moment after the start and
+//   ~/.cache/nebula-shot.png, and L16_SHOT=path takes one a moment after the start and
 //   closes the window.
 
 use gtk::prelude::*;
@@ -75,20 +75,20 @@ pub fn screenshot(window: &gtk::ApplicationWindow, path: &Path) {
     snap.scale(scale, scale);
     gtk::WidgetPaintable::new(Some(window)).snapshot(&snap, w as f64, h as f64);
     let (Some(node), Some(renderer)) = (snap.to_node(), window.native().and_then(|n| n.renderer())) else {
-        eprintln!("l16-camera2: screenshot: nothing to render");
+        eprintln!("nebula: screenshot: nothing to render");
         return;
     };
     let texture = renderer.render_texture(&node, Some(&graphene::Rect::new(0.0, 0.0, w * scale, h * scale)));
     match texture.save_to_png(path) {
-        Ok(()) => eprintln!("l16-camera2: screenshot {}", path.display()),
-        Err(e) => eprintln!("l16-camera2: screenshot {}: {e}", path.display()),
+        Ok(()) => eprintln!("nebula: screenshot {}", path.display()),
+        Err(e) => eprintln!("nebula: screenshot {}: {e}", path.display()),
     }
 }
 
 pub fn hooks(window: &gtk::ApplicationWindow) {
     let w = window.clone();
     glib::unix_signal_add_local(libc::SIGUSR1, move || {
-        screenshot(&w, &glib::user_cache_dir().join("l16-camera2-shot.png"));
+        screenshot(&w, &glib::user_cache_dir().join("nebula-shot.png"));
         glib::ControlFlow::Continue
     });
     // SIGUSR2: the shutter sparkle, without taking a photo

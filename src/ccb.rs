@@ -73,7 +73,7 @@ impl Ccb {
                 let dev = format!("/dev/{}", entry.file_name().to_string_lossy());
                 match OpenOptions::new().read(true).write(true).open(&dev) {
                     Ok(file) => return Some(Ccb { file }),
-                    Err(e) => eprintln!("l16-camera2: {dev}: {e}"),
+                    Err(e) => eprintln!("nebula: {dev}: {e}"),
                 }
             }
         }
@@ -115,7 +115,7 @@ impl Ccb {
         let r = unsafe { libc::ioctl(self.file.as_raw_fd(), VIDIOC_S_CTRL as _, &mut c) };
         if r != 0 {
             eprintln!(
-                "l16-camera2: control {id:#x} = {value}: {}",
+                "nebula: control {id:#x} = {value}: {}",
                 std::io::Error::last_os_error()
             );
         }

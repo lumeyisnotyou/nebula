@@ -31,7 +31,7 @@ impl Haptics {
             OpenOptions::new().read(true).write(true).open(format!("/dev/input/{node}")).ok()
         });
         if dev.is_none() {
-            eprintln!("l16-camera2: no vibration motor");
+            eprintln!("nebula: no vibration motor");
         }
         Haptics { dev, effects: RefCell::new(HashMap::new()) }
     }

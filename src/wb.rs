@@ -111,7 +111,7 @@ impl Calibration {
             o += len;
         }
         for (name, id) in [("A1", 0), ("B4", 8)] {
-            eprintln!("l16-camera2: colour calibration {name}: {:?}", cal.modules.get(&id));
+            eprintln!("nebula: colour calibration {name}: {:?}", cal.modules.get(&id));
         }
         cal
     }

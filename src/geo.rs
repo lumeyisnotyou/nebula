@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const BUS: &str = "org.freedesktop.GeoClue2";
-const DESKTOP_ID: &str = "org.l16linux.Camera2";
+const DESKTOP_ID: &str = "org.l16linux.Nebula";
 // a photo is tagged with a fix no older than this, and no worse (geoclue's IP fallback is
 // ~25 km: a wrong place, not a rough one)
 const MAX_AGE: Duration = Duration::from_secs(600);
@@ -52,7 +52,7 @@ impl Geo {
                 self.failed = None;
             }
             Err(e) => {
-                eprintln!("l16-camera2: location: {e}");
+                eprintln!("nebula: location: {e}");
                 self.failed = Some(Instant::now());
             }
         }

@@ -1,4 +1,5 @@
-// l16-camera: a camera app for the Light L16 on Linux, laid out after OpenLight (the L16's
+// Nebula: a camera app for the Light L16 on Linux, a pro-camera instrument display. It began as
+// l16-camera, laid out after OpenLight (the L16's
 // community camera app): exposure readout on the left, the preview, and on the right the
 // shutter between the two exposure dials, the last photo above and the toolbar below.
 //
@@ -40,6 +41,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use canvas::Canvas;
+use dots::Roll;
 use rotate::Rotator;
 use ruler::Ruler;
 use zoomview::ZoomView;
@@ -136,8 +138,9 @@ const CSS: &str = "
 window.camera { background: #000; color: #f2f2ee; font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; }
 .mono, .set-value, .countdown, .burst-count { font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; }
 .flyout { background: #101012; border: 1px solid alpha(@accent, 0.55); border-radius: 10px; }
+.encoder.held { border-color: alpha(@accent, 0.8); background: #17171a; }
 .encoder { background: #121214; border: 1px solid rgba(255,255,255,0.09); border-radius: 10px;
-    transition: border-color 160ms ease; }
+    transition: border-color 200ms ease, background 200ms ease; }
 button.flat-white { background: none; border: none; box-shadow: none; outline: none; color: #f2f2ee;
     font-size: 15px; font-weight: 600; min-width: 44px; min-height: 40px; padding: 0; border-radius: 8px;
     transition: background 140ms ease, color 140ms ease; }
@@ -145,14 +148,15 @@ button.flat-white:active { background: rgba(255,255,255,0.10); }
 .key { background: #151517; border: 1px solid rgba(255,255,255,0.09); box-shadow: none; outline: none;
     color: rgba(242,242,238,0.82); padding: 0; border-radius: 10px; min-width: 70px; min-height: 74px;
     font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
-    transition: background 120ms ease, color 120ms ease, border-color 160ms ease, opacity 220ms ease, transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
-.key:active { background: #232327; }
+    transition: background 200ms ease, color 200ms ease, border-color 220ms ease, opacity 220ms ease, transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.key:active { background: #2c2c32; transform: scale(0.93); }
 .key.on { color: @accent; background: alpha(@accent, 0.13); border-color: alpha(@accent, 0.75); }
 .zoom-pill { background: rgba(18,18,20,0.88); border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; padding: 3px; }
 .zoom-chip { background: none; border: none; box-shadow: none; outline: none; padding: 0; border-radius: 6px;
     color: rgba(242,242,238,0.75); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
     font-size: 16px; font-weight: 700; min-width: 70px; min-height: 42px;
     transition: background 140ms ease, color 140ms ease; }
+.zoom-chip:active { transform: scale(0.94); }
 .zoom-chip.active { background: @accent; color: #0b0b0c; }
 .countdown { color: #f2f2ee; font-size: 110px; font-weight: 700; }
 .thumb { border: 1px solid rgba(255,255,255,0.55); border-radius: 10px; }
@@ -180,8 +184,8 @@ window.rot-ccw .spin { transform: rotate(-90deg); }
 .picker { background: #141416; border: 1px solid alpha(@accent, 0.55); border-radius: 12px; padding: 6px; }
 .pick-row { background: none; border: none; box-shadow: none; outline: none; color: rgba(242,242,238,0.85);
     border-radius: 8px; min-height: 54px; padding: 0 16px; font-size: 19px; font-weight: 600;
-    transition: background 140ms ease, color 140ms ease; }
-.pick-row:active { background: rgba(255,255,255,0.10); }
+    transition: background 180ms ease, color 180ms ease, transform 140ms ease; }
+.pick-row:active { background: rgba(255,255,255,0.14); transform: scale(0.97); }
 .pick-row.on { background: @accent; color: #0b0b0c; }
 .bubble { background: #141416; border: 1px solid alpha(@accent, 0.55); border-radius: 12px; padding: 12px 16px; }
 .bubble-title { color: @accent; font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 17px; font-weight: 700; }
@@ -201,7 +205,7 @@ window.rot-ccw .spin { transform: rotate(-90deg); }
     font-weight: 700; letter-spacing: 3px; margin-bottom: 8px; }
 .side-row { background: none; border: none; box-shadow: none; outline: none; color: #f2f2ee; border-radius: 10px;
     min-height: 56px; padding: 0 12px; font-size: 19px; font-weight: 600; }
-.side-row:active { background: rgba(255,255,255,0.10); }
+.side-row:active { background: rgba(255,255,255,0.14); transform: scale(0.98); }
 .side-head { color: rgba(242,242,238,0.45); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 12px;
     font-weight: 700; letter-spacing: 2px; margin-top: 18px; margin-bottom: 4px; padding-left: 12px; }
 .side-quick { padding-left: 12px; }
@@ -233,6 +237,10 @@ window.contrast .pill, window.contrast .bubble { background: #26262b; border-wid
 window.contrast .bubble-text { color: #ffffff; }
 window.contrast .sidebar, window.contrast .nav { background: #1c1c20; }
 window.contrast .set-sub, window.contrast .side-about, window.contrast .about-line { color: rgba(255,255,255,0.85); }
+.page { transition: opacity 240ms ease, transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.page.page-off { opacity: 0; transform: translateX(56px); }
+.nav row { transition: background 180ms ease, color 180ms ease; }
+.side-row, .pick-row, .zoom-chip { transition: background 180ms ease, color 180ms ease, transform 140ms ease; }
 ";
 
 #[derive(Clone, Copy, PartialEq)]
@@ -561,6 +569,7 @@ struct App {
     pill_timer: RefCell<Option<glib::SourceId>>,
     alert_turn: Rotator,
     alert_icon: gtk::Label,
+    lens_art: gtk::DrawingArea,
     alert_title: gtk::Label,
     alert_text: gtk::Label,
     alert_timer: RefCell<Option<glib::SourceId>>,
@@ -600,7 +609,8 @@ struct App {
     // the big readout that opens beside an encoder while it is held, out from under the thumb
     flyout: Canvas,
     flyout_turn: Rotator,
-    flyout_text: RefCell<String>,
+    enc_roll: Vec<Rc<Roll>>,
+    flyout_roll: Rc<Roll>,
     flyout_cells: Cell<usize>,
     bright: Cell<bool>, // the light is bright enough for high contrast (with some hysteresis)
     shutter_flash: Cell<Option<Instant>>,
@@ -645,7 +655,6 @@ struct App {
     centre: gtk::Overlay,
     frame: gtk::AspectFrame,
     right: gtk::Box,
-    thumb_box: gtk::Overlay,
     shutter_row: gtk::Box,
     shutter_fill: gtk::Box,
     stow_t: Cell<f64>,
@@ -1119,6 +1128,10 @@ impl App {
         let saved = st.saved();
         let busy = st.busy;
         let enc = [Dial::Iso, Dial::Shutter, Dial::Ev].map(|d| encoder_key(&st, d));
+        for (k, d) in [Dial::Iso, Dial::Shutter, Dial::Ev].into_iter().enumerate() {
+            let (_, value, frac, _) = encoder_shows(&st, d);
+            self.enc_roll[k].set(&self.encoders[k], &value, frac);
+        }
         let grid = st.grid | (st.histogram as u8) << 4;
         let geotag = st.geotag && !st.asleep;
         drop(st);
@@ -1195,6 +1208,9 @@ impl App {
         self.alert_text.set_text(text);
         self.alert_text.set_visible(!text.is_empty());
         self.alert_key.set(key);
+        self.lens_art.set_visible(key == "lens");
+        self.alert_icon.set_visible(key != "lens");
+        self.lens_art.queue_draw();
         set_class(&self.alert_turn, "off", false);
         self.place_alert();
         if let Some(old) = self.alert_timer.borrow_mut().take() {
@@ -1208,6 +1224,50 @@ impl App {
                 set_class(&a.alert_turn, "off", true);
             });
             *self.alert_timer.borrow_mut() = Some(id);
+        }
+    }
+
+    // the camera's back, the covered lenses lit: where the lens is blocked
+    fn draw_lens_art(&self, cr: &cairo::Context, w: f64, h: f64) {
+        let mask = self.st.borrow().lens_mask;
+        let (bw, bh) = (160.0, 93.0);
+        let (x0, y0) = ((w - bw) / 2.0, (h - bh) / 2.0);
+        let (r, cut) = (6.0, 22.0);
+        cr.new_path();
+        cr.arc(x0 + r, y0 + r, r, PI, 1.5 * PI);
+        cr.line_to(x0 + bw - cut, y0);
+        cr.line_to(x0 + bw, y0 + cut * 0.55);
+        cr.arc(x0 + bw - r, y0 + bh - r, r, 0.0, 0.5 * PI);
+        cr.arc(x0 + r, y0 + bh - r, r, 0.5 * PI, PI);
+        cr.close_path();
+        cr.set_source_rgb(0.2, 0.2, 0.22);
+        let _ = cr.fill_preserve();
+        cr.set_source_rgb(0.95, 0.95, 0.95);
+        cr.set_line_width(2.5);
+        let _ = cr.stroke();
+        let at = [
+            (x0, y0 + 10.0),
+            (x0, y0 + bh / 2.0),
+            (x0, y0 + bh - 10.0),
+            (x0 + bw / 2.0, y0),
+            (x0 + bw / 2.0, y0 + bh),
+        ];
+        let (ar, ag, ab) = accent();
+        for (i, (x, y)) in at.iter().enumerate() {
+            if mask & (1 << i) == 0 {
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.25);
+                cr.arc(*x, *y, 4.0, 0.0, 2.0 * PI);
+                let _ = cr.fill();
+                continue;
+            }
+            for (rad, a) in [(16.0, 0.22), (11.0, 0.4)] {
+                cr.set_source_rgba(ar, ag, ab, a);
+                cr.arc(*x, *y, rad, 0.0, 2.0 * PI);
+                let _ = cr.fill();
+            }
+            cr.set_source_rgb(1.0, 1.0, 1.0);
+            cr.arc(*x, *y, 6.0, 0.0, 2.0 * PI);
+            let _ = cr.fill();
         }
     }
 
@@ -1317,7 +1377,7 @@ impl App {
             (st.wb, st.module)
         };
         let gains = self.cal.gains(preset, module);
-        eprintln!("l16-camera2: white balance {} (module {module}): {gains:?}", wb::PRESETS[preset]);
+        eprintln!("nebula: white balance {} (module {module}): {gains:?}", wb::PRESETS[preset]);
         match gains {
             None => src.set_property("awb-enable", true),
             Some((r, b)) => {
@@ -1458,7 +1518,7 @@ impl App {
         let o = accel.cached_property("AccelerometerOrientation").and_then(|v| v.get::<String>());
         let q = o.as_deref().and_then(quarter_for);
         if q.is_some_and(|q| q != self.quarter.get()) {
-            eprintln!("l16-camera2: orientation {o:?} -> quarter {q:?} (was {})", self.quarter.get());
+            eprintln!("nebula: orientation {o:?} -> quarter {q:?} (was {})", self.quarter.get());
         }
         let Some(q) = q else { return };
         self.apply_quarter(q);
@@ -1744,7 +1804,7 @@ impl App {
     }
 
     fn shutter_pressed(self: &Rc<Self>) {
-        self.settings_page.set_visible(false);
+        self.close_settings();
         let (busy, counting, t) = {
             let st = self.st.borrow();
             (st.busy, st.counting, TIMERS[st.timer])
@@ -1913,7 +1973,7 @@ impl App {
                 Err(e) => return drop(tx.send(Stage::Captured(Err(e)))),
             };
             eprintln!(
-                "l16-camera2: captured {} in {:.2} s: records {:?} (burst {burst}, status {})",
+                "nebula: captured {} in {:.2} s: records {:?} (burst {burst}, status {})",
                 dir.display(),
                 t.elapsed().as_secs_f64(),
                 cap.records,
@@ -1961,7 +2021,7 @@ impl App {
                 q.remove(i);
                 let _ = tx.send(Stage::Transferred(Err((dir.clone(), err.unwrap_or("records missing".into())))));
             } else {
-                eprintln!("l16-camera2: transferred {} in {:.2} s", dir.display(), t.elapsed().as_secs_f64());
+                eprintln!("nebula: transferred {} in {:.2} s", dir.display(), t.elapsed().as_secs_f64());
             }
         });
     }
@@ -2057,10 +2117,10 @@ impl App {
         match r {
             Ok((_, Some(fds))) => match fds.get(0) {
                 Ok(fd) => *self.sleep_inhibitor.borrow_mut() = Some(fd),
-                Err(e) => eprintln!("l16-camera2: sleep inhibitor: {e}"),
+                Err(e) => eprintln!("nebula: sleep inhibitor: {e}"),
             },
-            Ok((_, None)) => eprintln!("l16-camera2: sleep inhibitor: no fd"),
-            Err(e) => eprintln!("l16-camera2: sleep inhibitor: {e}"),
+            Ok((_, None)) => eprintln!("nebula: sleep inhibitor: no fd"),
+            Err(e) => eprintln!("nebula: sleep inhibitor: {e}"),
         }
     }
 
@@ -2083,7 +2143,7 @@ impl App {
             "/org/sigxcpu/Feedback",
             "org.sigxcpu.Feedback",
             "TriggerEvent",
-            Some(&("org.l16linux.Camera2", event, hints, -1i32).to_variant()),
+            Some(&("org.l16linux.Nebula", event, hints, -1i32).to_variant()),
             None,
             gtk::gio::DBusCallFlags::NONE,
             -1,
@@ -2266,7 +2326,7 @@ impl App {
             (l, _) => l,
         };
         let pause = if level == 2 && !pause.is_some_and(|p| Instant::now() < p) && temp.is_some_and(|t| t >= 56) {
-            eprintln!("l16-camera2: camera modules at {} C: cooling off", temp.unwrap_or(0));
+            eprintln!("nebula: camera modules at {} C: cooling off", temp.unwrap_or(0));
             Some(Instant::now() + Duration::from_secs(120))
         } else if level == 2 {
             pause
@@ -2291,8 +2351,9 @@ impl App {
         let mask = if warn > 0 { mask } else { 0 };
         if mask != shown {
             self.st.borrow_mut().lens_mask = mask;
+            self.lens_art.queue_draw();
             if mask != 0 {
-                self.show_alert("lens", icons::CAMERA, "Lens blocked", "Something is over a lens: move it away to see the whole frame.", 0);
+                self.show_alert("lens", icons::CAMERA, "Lens blocked", "Something is over the lit lens: move it away to see the whole frame.", 0);
             } else {
                 self.clear_alert("lens");
             }
@@ -2360,7 +2421,7 @@ impl App {
         if held >= 30 {
             self.st.borrow_mut().pocket_since = None;
             eprintln!(
-                "l16-camera2: in a pocket (lenses covered {:#04b}, {lux:.1} lux, 30 s): blanking the screen",
+                "nebula: in a pocket (lenses covered {:#04b}, {lux:.1} lux, 30 s): blanking the screen",
                 self.blocked.load(Ordering::Relaxed)
             );
             self.clear_alert("status");
@@ -2403,7 +2464,7 @@ impl App {
             if let Some(id) = a.transfers_wait.borrow_mut().take() {
                 p.disconnect(id);
             }
-            eprintln!("l16-camera2: first preview frame");
+            eprintln!("nebula: first preview frame");
             if !a.st.borrow().asleep && a.transfers.borrow().is_none() {
                 a.start_transfers();
             }
@@ -2492,20 +2553,20 @@ impl App {
             (st.asleep, st.busy || st.saving > 0 || st.counting)
         };
         if !on && !asleep && !busy {
-            eprintln!("l16-camera2: sleep (screen {screen}, away {away}): stopping");
+            eprintln!("nebula: sleep (screen {screen}, away {away}): stopping");
             self.st.borrow_mut().asleep = true;
             self.gyro_on.store(false, Ordering::Relaxed);
             if let Some(mut t) = self.transfers.borrow_mut().take() {
                 t.stop();
             }
             self.stop_preview();
-            eprintln!("l16-camera2: sleep: preview stopped");
+            eprintln!("nebula: sleep: preview stopped");
         } else if on && asleep {
-            eprintln!("l16-camera2: wake (screen {screen}, front {front}, seen {seen}): starting the preview");
+            eprintln!("nebula: wake (screen {screen}, front {front}, seen {seen}): starting the preview");
             self.st.borrow_mut().asleep = false;
             self.gyro_on.store(true, Ordering::Relaxed);
             let r = self.pipeline.set_state(gst::State::Playing);
-            eprintln!("l16-camera2: wake: set_state(Playing) = {r:?}");
+            eprintln!("nebula: wake: set_state(Playing) = {r:?}");
             self.apply_exposure();
             self.apply_wb();
             self.start_transfers_on_frame();
@@ -2540,7 +2601,7 @@ impl App {
             if transform.as_deref() != Some("270") {
                 set_display_transform("270");
             }
-            eprintln!("l16-camera2: display held in landscape (was lock {was}, transform {transform:?})");
+            eprintln!("nebula: display held in landscape (was lock {was}, transform {transform:?})");
             *self.landscape_held.borrow_mut() = Some((was, transform));
         } else if !front && held {
             self.release_landscape();
@@ -2559,7 +2620,7 @@ impl App {
         if let Some(lock) = rotation_lock() {
             let _ = lock.set_boolean("orientation-lock", was);
         }
-        eprintln!("l16-camera2: display given back (lock {was})");
+        eprintln!("nebula: display given back (lock {was})");
     }
 
     // AF-D as stock's app runs it (SmartAFTriggerMgr; there is no ASIC mode for stills): the
@@ -2892,7 +2953,7 @@ impl App {
                 self.wheels.set(pos);
                 self.flyout_unit.set(dial_name(dial));
                 self.flyout_suffix.set("");
-                self.set_flyout_text(&value, [4, 6, 4][dial_index(dial)]);
+                self.set_flyout_text(&value, [4, 6, 4][dial_index(dial)], 1.0 - pos);
                 shown = Some(dial_index(dial) as u8);
             } else if st.zoom_wheel_until.is_some_and(|t| Instant::now() < t) {
                 let pos = (st.zoom / ZOOM_MIN).ln();
@@ -2900,7 +2961,7 @@ impl App {
                 self.wheels.set(pos);
                 self.flyout_unit.set("FOCAL LENGTH");
                 self.flyout_suffix.set("mm");
-                self.set_flyout_text(&format!("{:.0}", st.zoom), 3);
+                self.set_flyout_text(&format!("{:.0}", st.zoom), 3, pos);
                 shown = Some(3);
             }
         }
@@ -2916,6 +2977,9 @@ impl App {
             None => self.flyout_at.set(255),
         }
         set_class(&self.flyout_turn, "off", shown.is_none());
+        for (k, c) in self.encoders.iter().enumerate() {
+            set_class(c, "held", shown == Some(k as u8));
+        }
     }
 
     // ---- the mode picker, the bubble, the preset
@@ -3255,6 +3319,29 @@ impl App {
         settings_ui::fill_pane(self, &self.settings_pane, 0);
     }
 
+    // the settings page in (it fades and slides in) or out; hidden after its outro
+    fn open_settings(self: &Rc<Self>) {
+        self.fill_settings();
+        self.settings_page.set_visible(true);
+        let a = self.clone();
+        glib::timeout_add_local_once(Duration::from_millis(30), move || set_class(&a.settings_page, "page-off", false));
+        self.follow_screen();
+    }
+
+    fn close_settings(self: &Rc<Self>) {
+        if !self.settings_page.is_visible() {
+            return;
+        }
+        set_class(&self.settings_page, "page-off", true);
+        let a = self.clone();
+        glib::timeout_add_local_once(Duration::from_millis(260), move || {
+            if a.settings_page.has_css_class("page-off") {
+                a.settings_page.set_visible(false);
+                a.follow_screen();
+            }
+        });
+    }
+
     fn dial_active(&self, dial: Dial) -> bool {
         let mode = self.st.borrow().mode;
         match dial {
@@ -3343,7 +3430,7 @@ impl App {
             cr.set_source_rgba(1.0, 1.0, 1.0, 0.45);
             text(cr, "AUTO", w - 10.0, 14.0, 9.0, 1.0);
         }
-        dots::draw_cells(cr, &value, [4, 6, 4][dial_index(dial)], 14.0, cy + r + 14.0, 3.0, on);
+        self.enc_roll[dial_index(dial)].draw(cr, &value, [4, 6, 4][dial_index(dial)], 14.0, cy + r + 14.0, 3.0, on);
     }
 
     // the flyout: what is being set, large, in dot matrix, left-justified in its cells
@@ -3355,7 +3442,7 @@ impl App {
         let pitch = 5.0;
         let top = 28.0 + (h - 28.0 - 7.0 * pitch) / 2.0 - 2.0;
         let on = (accent().0, accent().1, accent().2, 1.0);
-        dots::draw_cells(cr, &self.flyout_text.borrow(), cells, 20.0, top, pitch, on);
+        self.flyout_roll.draw(cr, "", cells, 20.0, top, pitch, on);
         // a suffix (mm) sits after the cells
         let suffix = self.flyout_suffix.get();
         if !suffix.is_empty() {
@@ -3364,13 +3451,10 @@ impl App {
         }
     }
 
-    // the flyout's value, in @cells cells; it shows at once
-    fn set_flyout_text(&self, value: &str, cells: usize) {
-        if *self.flyout_text.borrow() != value || self.flyout_cells.get() != cells {
-            self.flyout_text.replace(value.to_string());
-            self.flyout_cells.set(cells);
-            self.flyout.queue_draw();
-        }
+    // the flyout's value, in @cells cells, rolling from the last one; @up is the value's position
+    fn set_flyout_text(&self, value: &str, cells: usize, up: f64) {
+        self.flyout_cells.set(cells);
+        self.flyout_roll.set(&self.flyout, value, up);
     }
 
     // the panel, in place: beside the encoder of a dial (to its right, on the preview, where the
@@ -3472,7 +3556,7 @@ fn display_transform() -> Option<String> {
 
 fn set_display_transform(t: &str) {
     if let Err(e) = Command::new("wlr-randr").args(["--output", "DSI-1", "--transform", t]).status() {
-        eprintln!("l16-camera2: display transform: {e}");
+        eprintln!("nebula: display transform: {e}");
     }
 }
 
@@ -3493,7 +3577,7 @@ fn blank_screen() {
         None::<&gtk::gio::Cancellable>,
         |r| {
             if let Err(e) = r {
-                eprintln!("l16-camera2: blanking the screen: {e}");
+                eprintln!("nebula: blanking the screen: {e}");
             }
         },
     );
@@ -3615,7 +3699,7 @@ fn build(gapp: &gtk::Application) {
         .expect("bus")
         .add_watch_local(|_, msg| {
             if let gst::MessageView::Error(e) = msg.view() {
-                eprintln!("l16-camera2: preview: {} ({:?})", e.error(), e.debug());
+                eprintln!("nebula: preview: {} ({:?})", e.error(), e.debug());
             }
             glib::ControlFlow::Continue
         })
@@ -3916,6 +4000,8 @@ fn build(gapp: &gtk::Application) {
     let settings_page = gtk::Overlay::new();
     settings_page.set_child(Some(&turn(settings_box.upcast_ref())));
     settings_page.set_visible(false);
+    settings_page.add_css_class("page");
+    settings_page.add_css_class("page-off");
     // the notices at the top of the screen: a small pill, and under it an alert with a line of text
     let pill_label = gtk::Label::new(None);
     pill_label.add_css_class("pill");
@@ -3939,8 +4025,13 @@ fn build(gapp: &gtk::Application) {
     let alert_body = gtk::Box::new(gtk::Orientation::Vertical, 3);
     alert_body.append(&alert_title);
     alert_body.append(&alert_text);
+    // the camera's back with the covered lenses lit (for the lens-blocked alert only)
+    let lens_art = gtk::DrawingArea::new();
+    lens_art.set_size_request(208, 116);
+    lens_art.set_visible(false);
     let alert_card = gtk::Box::new(gtk::Orientation::Horizontal, 14);
     alert_card.add_css_class("bubble");
+    alert_card.append(&lens_art);
     alert_card.append(&alert_icon);
     alert_card.append(&alert_body);
     alert_card.set_halign(gtk::Align::Center);
@@ -4041,7 +4132,8 @@ fn build(gapp: &gtk::Application) {
     status_box.set_margin_start(12);
     status_box.set_margin_top(16);
     status_box.set_can_target(false);
-    let status_box_turn = turn(status_box.upcast_ref());
+    storage_label.add_css_class("spin");
+    battery_label.add_css_class("spin");
     // stock's LowBatteryFragment: over everything (touches too) at 10% or less, until 12%
     let battery_screen = gtk::Box::new(gtk::Orientation::Vertical, 16);
     battery_screen.add_css_class("battery-screen");
@@ -4090,7 +4182,7 @@ fn build(gapp: &gtk::Application) {
     root.set_child(Some(&deck));
     // on the preview, at its bottom edge as the camera is held (place_status)
     centre.add_overlay(&thermal_turn);
-    root.add_overlay(&status_box_turn);
+    root.add_overlay(&status_box);
     preview.add_overlay(&pill_turn);
     preview.add_overlay(&alert_turn);
     root.add_overlay(&countdown);
@@ -4241,6 +4333,7 @@ fn build(gapp: &gtk::Application) {
         pill_timer: RefCell::new(None),
         alert_turn: alert_turn.clone(),
         alert_icon: alert_icon.clone(),
+        lens_art: lens_art.clone(),
         alert_title: alert_title.clone(),
         alert_text: alert_text.clone(),
         alert_timer: RefCell::new(None),
@@ -4273,7 +4366,8 @@ fn build(gapp: &gtk::Application) {
         enc_shown: Cell::new([0; 3]),
         flyout: flyout.clone(),
         flyout_turn: flyout_turn.clone(),
-        flyout_text: RefCell::new(String::new()),
+        enc_roll: (0..3).map(|_| Roll::new()).collect(),
+        flyout_roll: Roll::new(),
         flyout_cells: Cell::new(4),
         bright: Cell::new(false),
         shutter_flash: Cell::new(None),
@@ -4308,7 +4402,6 @@ fn build(gapp: &gtk::Application) {
         centre: centre.clone(),
         frame: frame.clone(),
         right: right.clone(),
-        thumb_box: thumb_box.clone(),
         shutter_row: shutter_row.clone(),
         shutter_fill: shutter_fill.clone(),
         stow_t: Cell::new(0.0),
@@ -4381,6 +4474,8 @@ fn build(gapp: &gtk::Application) {
             a.draw_focus(cr, &st, a.focus_centre.get());
         }
     });
+    let a = app.clone();
+    app.lens_art.set_draw_func(move |_, cr, w, h| a.draw_lens_art(cr, w as f64, h as f64));
     let a = app.clone();
     app.shutter.set_draw_func(move |_, cr, w, h| a.draw_shutter(cr, w as f64, h as f64));
     for (c, dial) in app.encoders.iter().zip([Dial::Iso, Dial::Shutter, Dial::Ev]) {
@@ -4578,19 +4673,14 @@ fn build(gapp: &gtk::Application) {
     let a = app.clone();
     settings_btn.connect_clicked(move |_| {
         a.show_sidebar(false);
-        a.fill_settings();
-        a.settings_page.set_visible(true);
-        a.follow_screen();
+        a.open_settings();
     });
     for (chip, &prime) in app.zoom_chips.iter().zip(PRIMES) {
         let a = app.clone();
         chip.connect_clicked(move |_| a.zoom_to(prime));
     }
     let a = app.clone();
-    settings_back.connect_clicked(move |_| {
-        a.settings_page.set_visible(false);
-        a.follow_screen();
-    });
+    settings_back.connect_clicked(move |_| a.close_settings());
     // back in front: the preview again at once
     let a = app.clone();
     window.connect_is_active_notify(move |w| {
@@ -4619,7 +4709,7 @@ fn build(gapp: &gtk::Application) {
     // closing: the window goes at once (the shell's close animation doesn't wait for the
     // camera), then the transfer streams and the preview stop in their order and the app ends
     window.connect_close_request(move |w| {
-        eprintln!("l16-camera2: window closed");
+        eprintln!("nebula: window closed");
         CLOSING.store(true, Ordering::Relaxed);
         a.release_landscape();
         w.set_visible(false);
@@ -4632,14 +4722,14 @@ fn build(gapp: &gtk::Application) {
                 "/org/freedesktop/DBus",
                 "org.freedesktop.DBus",
                 "ReleaseName",
-                Some(&("org.l16linux.Camera2",).to_variant()),
+                Some(&("org.l16linux.Nebula",).to_variant()),
                 None,
                 gtk::gio::DBusCallFlags::NONE,
                 1000,
                 None::<&gtk::gio::Cancellable>,
             );
             if let Err(e) = r {
-                eprintln!("l16-camera2: giving up the app's name: {e}");
+                eprintln!("nebula: giving up the app's name: {e}");
             }
         }
         let (a, w, waiting) = (a.clone(), w.clone(), a.clone());
@@ -4650,7 +4740,7 @@ fn build(gapp: &gtk::Application) {
             }
             a.stop_preview();
             a.geo.borrow_mut().stop();
-            eprintln!("l16-camera2: closed in {:.2} s", t.elapsed().as_secs_f64());
+            eprintln!("nebula: closed in {:.2} s", t.elapsed().as_secs_f64());
             // quit outright: started from the app grid, the application is registered on the
             // session bus and stayed running (hidden) once its window was gone
             let gapp = w.application();
@@ -4673,7 +4763,7 @@ fn build(gapp: &gtk::Application) {
                 return glib::ControlFlow::Continue;
             }
             if left > 0 {
-                eprintln!("l16-camera2: closing with {left} photo(s) still on their way");
+                eprintln!("nebula: closing with {left} photo(s) still on their way");
             }
             if let Some(finish) = finish.take() {
                 finish();
@@ -4728,13 +4818,13 @@ fn build(gapp: &gtk::Application) {
     if take_camera() {
         start();
     } else {
-        eprintln!("l16-camera2: waiting for the last camera to close");
+        eprintln!("nebula: waiting for the last camera to close");
         let mut start = Some(start);
         glib::timeout_add_local(Duration::from_millis(100), move || {
             if !take_camera() {
                 return glib::ControlFlow::Continue;
             }
-            eprintln!("l16-camera2: the last camera closed");
+            eprintln!("nebula: the last camera closed");
             if let Some(start) = start.take() {
                 start();
             }
@@ -4793,7 +4883,9 @@ fn build(gapp: &gtk::Application) {
                         set_class(&a.thermal_turn, "off", false);
                         a.animate_thermal(1.0);
                     }
-                    "lens" => a.show_alert("lens", icons::CAMERA, "Lens blocked", "Something is over a lens: move it away to see the whole frame.", 0),
+                    "lens" => {
+                        a.blocked.store(0b00101, Ordering::Relaxed);
+                    }
                     "stow" => a.set_stowed(true),
                     "system" => a.show_sidebar(true),
                     "settings1" | "settings3" | "settings4" => {
@@ -4818,7 +4910,7 @@ fn build(gapp: &gtk::Application) {
                         a.fill_settings();
                         a.settings_page.set_visible(true);
                     }
-                    other => eprintln!("l16-camera2: no demo view {other:?}"),
+                    other => eprintln!("nebula: no demo view {other:?}"),
                 }
             }
         });
@@ -4865,10 +4957,10 @@ static CLOSING: AtomicBool = AtomicBool::new(false);
 
 fn main() -> glib::ExitCode {
     // started from the app grid, the output went to the console: to a file instead
-    // (~/.cache/l16-camera2.log; appended to, as a launch that only hands over to a running
+    // (~/.cache/nebula.log; appended to, as a launch that only hands over to a running
     // camera is a process too; started afresh past 1 MB)
     if unsafe { libc::isatty(2) } == 1 {
-        let path = glib::user_cache_dir().join("l16-camera2.log");
+        let path = glib::user_cache_dir().join("nebula.log");
         if std::fs::metadata(&path).is_ok_and(|m| m.len() > 1 << 20) {
             let _ = std::fs::remove_file(&path);
         }
@@ -4880,19 +4972,19 @@ fn main() -> glib::ExitCode {
             }
         }
     }
-    eprintln!("l16-camera2: started (pid {})", std::process::id());
+    eprintln!("nebula: started (pid {})", std::process::id());
     // GTK redraws the whole window each frame: redrawing only what changed (the preview)
     // left the badges over it as flickering black bars
     if std::env::var_os("GSK_DEBUG").is_none() {
         std::env::set_var("GSK_DEBUG", "full-redraw");
     }
     gst::init().expect("gstreamer");
-    let app = gtk::Application::builder().application_id("org.l16linux.Camera2").build();
+    let app = gtk::Application::builder().application_id("org.l16linux.Nebula").build();
     // launched again while running (the gallery's camera button): back to the window there is
     app.connect_activate(|app| {
         // logged: an activation while the app was closing (its streams stopping) left the
         // preview dead (2026-10-02)
-        eprintln!("l16-camera2: activated (window {})", app.active_window().is_some());
+        eprintln!("nebula: activated (window {})", app.active_window().is_some());
         if CLOSING.load(Ordering::Relaxed) {
             // closing, its name given up: a launch now is a camera of its own
             return;
