@@ -614,6 +614,8 @@ struct App {
     flyout_cells: Cell<usize>,
     bright: Cell<bool>, // the light is bright enough for high contrast (with some hysteresis)
     shutter_flash: Cell<Option<Instant>>,
+    half_t: Cell<f64>, // the shutter's half-press: 0 the dot ring, 1 a solid line
+    half_anim: RefCell<Option<gtk::TickCallbackId>>,
     flyout_unit: Cell<&'static str>,
     flyout_suffix: Cell<&'static str>, // after the number: "mm"
     // where the flyout was last placed (0-2 an encoder, 3 the zoom, 255 hidden)
@@ -2662,7 +2664,11 @@ impl App {
             return;
         }
         match ev {
-            input::Ev::Key(input::KEY_CAMERA_FOCUS, true) => self.focus(self.last_focus_point()),
+            input::Ev::Key(input::KEY_CAMERA_FOCUS, true) => {
+                self.set_half(true);
+                self.focus(self.last_focus_point());
+            }
+            input::Ev::Key(input::KEY_CAMERA_FOCUS, false) => self.set_half(false),
             input::Ev::Key(input::KEY_CAMERA | input::KEY_VOLUMEUP, true) => self.shutter_pressed(),
             input::Ev::Key(..) => {}
             // the strip's position comes before its touch-down in each report
@@ -3482,25 +3488,58 @@ impl App {
         let t = self.shutter_flash.get().map_or(1.0, |t0| (t0.elapsed().as_secs_f64() / 0.55).min(1.0));
         let n = 40;
         let (ar, ag, ab) = accent();
+        let half = self.half_t.get();
+        let step = 2.0 * PI / n as f64;
+        cr.set_line_cap(cairo::LineCap::Round);
         for k in 0..n {
             let a = (k as f64 / n as f64 * 2.0 - 0.5) * PI;
-            let (x, y) = (cx + r * a.cos(), cy + r * a.sin());
             // the light: the dots up to t round the ring, then everything eases back
             let f = k as f64 / n as f64;
             let lit = if t < 1.0 { (1.0 - ((t - f).abs() * 6.0).min(1.0)).max(if f < t { (1.0 - t) * 1.6 } else { 0.0 }) } else { 0.0 };
-            let base = if busy { 0.28 } else { 0.7 };
+            // the half-press: the dots join into a line, sweeping round from the top
+            let m = (half * 1.5 - f * 0.5).clamp(0.0, 1.0);
+            let base = if busy { 0.28 } else { 0.7 + 0.25 * m };
             cr.set_source_rgba(
                 base + (ar - base) * lit,
                 base + (ag - base) * lit,
                 base + (ab - base) * lit,
                 if busy { 0.5 } else { 0.9 },
             );
-            cr.arc(x, y, 2.0, 0.0, 2.0 * PI);
-            let _ = cr.fill();
+            cr.set_line_width(4.0 - m);
+            let reach = step * (0.5 * m + 0.02);
+            cr.new_path();
+            cr.arc(cx, cy, r, a - reach, a + reach);
+            let _ = cr.stroke();
         }
         cr.set_source_rgba(0.95, 0.95, 0.93, if busy { 0.3 } else { 1.0 });
         cr.arc(cx, cy, r - 12.0, 0.0, 2.0 * PI);
         let _ = cr.fill();
+    }
+
+    // the half-press: the ring's dots join into a line (on), or open into dots again
+    fn set_half(self: &Rc<Self>, on: bool) {
+        if let Some(id) = self.half_anim.borrow_mut().take() {
+            id.remove();
+        }
+        let to = if on { 1.0 } else { 0.0 };
+        let a = self.clone();
+        let last = Cell::new(0i64);
+        let id = self.shutter.add_tick_callback(move |w, clock| {
+            let now = clock.frame_time();
+            let before = last.replace(now);
+            let dt = if before == 0 { 0.016 } else { ((now - before) as f64 / 1e6).clamp(0.001, 0.05) };
+            let cur = a.half_t.get();
+            let step = dt / 0.24;
+            let next = if to > cur { (cur + step).min(to) } else { (cur - step).max(to) };
+            a.half_t.set(next);
+            w.queue_draw();
+            if next == to {
+                a.half_anim.replace(None);
+                return glib::ControlFlow::Break;
+            }
+            glib::ControlFlow::Continue
+        });
+        *self.half_anim.borrow_mut() = Some(id);
     }
 
     // the light round the shutter's ring, for half a second
@@ -4371,6 +4410,8 @@ fn build(gapp: &gtk::Application) {
         flyout_cells: Cell::new(4),
         bright: Cell::new(false),
         shutter_flash: Cell::new(None),
+        half_t: Cell::new(0.0),
+        half_anim: RefCell::new(None),
         flyout_unit: Cell::new(""),
         flyout_suffix: Cell::new(""),
         flyout_at: Cell::new(255),
@@ -4887,6 +4928,10 @@ fn build(gapp: &gtk::Application) {
                         a.blocked.store(0b00101, Ordering::Relaxed);
                     }
                     "stow" => a.set_stowed(true),
+                    "half" => {
+                        a.half_t.set(1.0);
+                        a.shutter.queue_draw();
+                    }
                     "system" => a.show_sidebar(true),
                     "settings1" | "settings3" | "settings4" => {
                         a.fill_settings();
