@@ -187,14 +187,14 @@ window.rot-ccw .spin { transform: rotate(-90deg); }
     transition: background 180ms ease, color 180ms ease, transform 140ms ease; }
 .pick-row:active { background: rgba(255,255,255,0.14); transform: scale(0.97); }
 .pick-row.on { background: @accent; color: #0b0b0c; }
-.bubble { background: #141416; border: 1px solid alpha(@accent, 0.55); border-radius: 12px; padding: 12px 16px; }
+.bubble { background: #141416; border: 1px solid rgba(255,255,255,0.18); border-radius: 12px; padding: 12px 16px; }
 .bubble-title { color: @accent; font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 17px; font-weight: 700; }
 .bubble-text { color: rgba(242,242,238,0.82); font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 15px; }
 .enc-wrap { transition: opacity 240ms ease, transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .enc-wrap.gone { opacity: 0; transform: translateY(32px); }
 .key.stowed { opacity: 0; transform: translateX(44px); }
 .key.pinned { border-color: alpha(@accent, 0.55); }
-.pill { background: #141416; border: 1px solid alpha(@accent, 0.55); border-radius: 999px; padding: 6px 18px;
+.pill { background: #141416; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; padding: 6px 18px;
     color: #f2f2ee; font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 16px; font-weight: 600; }
 .alert-icon { color: @accent; }
 .scrim { background: rgba(0,0,0,0.6); }
