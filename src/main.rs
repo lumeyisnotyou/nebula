@@ -104,7 +104,7 @@ button.flat-white:active { background: rgba(255,255,255,0.10); }
 .key { background: #151517; border: 1px solid rgba(255,255,255,0.09); box-shadow: none; outline: none;
     color: rgba(242,242,238,0.82); padding: 0; border-radius: 10px; min-width: 70px; min-height: 74px;
     font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
-    transition: background 120ms ease, color 120ms ease, box-shadow 160ms ease; }
+    transition: background 120ms ease, color 120ms ease, box-shadow 160ms ease, opacity 220ms ease, transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .key:active { background: #232327; }
 .key.on { color: @accent; box-shadow: inset 0 3px 0 @accent; }
 .zoom-pill { background: #121214; border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; padding: 3px; }
@@ -164,6 +164,11 @@ window.rot-ccw .spin { transform: rotate(-90deg); }
 .bubble-text { color: rgba(242,242,238,0.82); font-size: 15px; }
 .enc-wrap { transition: opacity 240ms ease, transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .enc-wrap.gone { opacity: 0; transform: translateY(32px); }
+.key.stowed { opacity: 0; transform: translateX(44px); }
+.key.pinned { border-color: alpha(@accent, 0.55); }
+.system { background: #141416; border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; padding: 4px; }
+.sys { transition: opacity 220ms ease, transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.sys.sys-hidden { opacity: 0; transform: translateX(-40px); }
 ";
 
 #[derive(Clone, Copy, PartialEq)]
@@ -197,12 +202,6 @@ impl Mode {
 }
 
 // a photo's way from the shutter to the LRI (threads report on App::stage_tx)
-#[derive(Clone, Copy)]
-enum BubbleSide {
-    Left,
-    Right,
-}
-
 enum Stage {
     Captured(Result<PathBuf, String>), // the ASICs hold it (records in DIR)
     Transferred(Result<PathBuf, (PathBuf, String)>), // in DIR/asic*.raw (or DIR and what failed)
@@ -229,8 +228,9 @@ struct State {
     assist: u8, // focus peaking (1) and zebras (2), as bits
     accent: usize, // ACCENTS' index
     sparkle: bool, // a burst of light from the LED by the shutter button when a photo is taken
-    preset: usize, // PRESETS' index: what a double tap on the strip switches to
-    preset_prev: Option<PresetSnap>, // the settings before it did, while it is on
+    pinned: u16, // the keys that stay when the controls are swiped away (a bit each, grid order)
+    strip_fn: usize, // what the touch strip does: 0 zoom, 1 ISO, 2 shutter, 3 EV
+    strip_set: u8,   // which of those a double tap cycles through (a bit each)
     strip_tap_at: Option<Instant>, // the last tap on the strip's middle
     busy: bool,
     counting: bool,
@@ -310,7 +310,7 @@ impl State {
         let mode = self.mode.short();
         format!(
             "mode={mode}\niso={}\nshutter={}\nev={}\nflash={}\ntimer={}\ngrid={}\nhistogram={}\nassist={}\nburst={}\n\
-             wb={}\nmetering={}\ncaf={}\nstacked={}\nexposure_info={}\ninverse_wheel={}\nhaptics={}\ncontinuous={}\nstrip_zoom={}\ntoolbar={}\ntool_cycle={}\nlens_warn={}\ndevice_status={}\npocket={}\ngeotag={}\naccent={}\npreset={}\nsparkle={}\n",
+             wb={}\nmetering={}\ncaf={}\nstacked={}\nexposure_info={}\ninverse_wheel={}\nhaptics={}\ncontinuous={}\nstrip_zoom={}\ntoolbar={}\ntool_cycle={}\nlens_warn={}\ndevice_status={}\npocket={}\ngeotag={}\naccent={}\npinned={}\nstrip_set={}\nsparkle={}\n",
             self.iso,
             self.shutter,
             self.ev,
@@ -336,7 +336,8 @@ impl State {
             self.pocket as u8,
             self.geotag as u8,
             self.accent,
-            self.preset,
+            self.pinned,
+            self.strip_set,
             self.sparkle as u8,
         )
     }
@@ -375,7 +376,8 @@ impl State {
         self.pocket = flag("pocket", self.pocket);
         self.geotag = flag("geotag", self.geotag);
         self.sparkle = flag("sparkle", self.sparkle);
-        self.preset = num("preset").map_or(self.preset, |v| (v as usize).min(PRESETS.len() - 1));
+        self.pinned = num("pinned").map_or(self.pinned, |v| v as u16 & 0x0fff);
+        self.strip_set = num("strip_set").map_or(self.strip_set, |v| (v as u8) & 0b1111);
         self.accent = num("accent").map_or(self.accent, |v| (v as usize).min(ACCENTS.len() - 1));
     }
 }
@@ -422,12 +424,35 @@ const SETTINGS: &[SettingRow] = &[
         ),
     },
     SettingRow {
-        title: "Double-tap preset",
-        sub: "A double tap on the touch strip (or the preset key) switches to it, and back",
-        kind: SettingKind::Choice(
-            &["Off", "Daylight", "Action", "Low light", "Portrait"],
-            |s| s.preset,
-            |s, v| s.preset = v,
+        title: "Strip: zoom",
+        sub: "Zoom is one of the things a double tap on the touch strip switches it to",
+        kind: SettingKind::Switch(
+            |s| s.strip_set >> 0 & 1 == 1,
+            |s, v| if v { s.strip_set |= 1 << 0 } else { s.strip_set &= !(1 << 0) },
+        ),
+    },
+    SettingRow {
+        title: "Strip: ISO",
+        sub: "ISO is one of them (when the mode lets you set it)",
+        kind: SettingKind::Switch(
+            |s| s.strip_set >> 1 & 1 == 1,
+            |s, v| if v { s.strip_set |= 1 << 1 } else { s.strip_set &= !(1 << 1) },
+        ),
+    },
+    SettingRow {
+        title: "Strip: shutter",
+        sub: "Shutter is one of them (when the mode lets you set it)",
+        kind: SettingKind::Switch(
+            |s| s.strip_set >> 2 & 1 == 1,
+            |s, v| if v { s.strip_set |= 1 << 2 } else { s.strip_set &= !(1 << 2) },
+        ),
+    },
+    SettingRow {
+        title: "Strip: exposure",
+        sub: "EV is one of them (when the mode lets you set it)",
+        kind: SettingKind::Switch(
+            |s| s.strip_set >> 3 & 1 == 1,
+            |s, v| if v { s.strip_set |= 1 << 3 } else { s.strip_set &= !(1 << 3) },
         ),
     },
     SettingRow {
@@ -502,7 +527,7 @@ enum Tool {
     Afd,
     Meter,
     Geo,
-    Preset,
+    Strip,
 }
 
 const TOOLS: [Tool; 11] = [
@@ -516,7 +541,7 @@ const TOOLS: [Tool; 11] = [
     Tool::Afd,
     Tool::Meter,
     Tool::Geo,
-    Tool::Preset,
+    Tool::Strip,
 ];
 
 impl Tool {
@@ -533,7 +558,7 @@ impl Tool {
             Tool::Afd => "afd",
             Tool::Meter => "meter",
             Tool::Geo => "geo",
-            Tool::Preset => "preset",
+            Tool::Strip => "strip",
         }
     }
 
@@ -547,7 +572,7 @@ impl Tool {
             Tool::Burst => Some(Opt::Burst),
             Tool::Assist => Some(Opt::Assist),
             Tool::Meter => Some(Opt::Meter),
-            Tool::Histogram | Tool::Afd | Tool::Geo | Tool::Preset => None,
+            Tool::Histogram | Tool::Afd | Tool::Geo | Tool::Strip => None,
         }
     }
 }
@@ -630,6 +655,7 @@ struct App {
     flyout_turn: Rotator,
     flyout_anim: Rc<NumAnim>,
     flyout_unit: Cell<&'static str>,
+    flyout_suffix: Cell<&'static str>, // after the number: "mm"
     // where the flyout was last placed (0-2 an encoder, 3 the zoom, 255 hidden)
     flyout_at: Cell<u8>,
     css: gtk::CssProvider,
@@ -661,6 +687,11 @@ struct App {
     preview_gain: Cell<f32>,
     // the mode key (its picker opens beside it), and the picker's rows in MODES' order
     mode_btn: gtk::Button,
+    // the keys in the grid's order, whether the controls are swiped away, and the system panel
+    keys: Vec<gtk::Button>,
+    stowed: Cell<bool>,
+    system_turn: Rotator,
+    system_timer: RefCell<Option<glib::SourceId>>,
     picker_turn: Rotator,
     picker_card: gtk::Box,
     picker_rows: Vec<gtk::Button>,
@@ -674,13 +705,15 @@ struct App {
     enc_turn: Vec<Rotator>,
     meter_btn: gtk::Button,
     geo_btn: gtk::Button,
-    preset_btn: gtk::Button,
+    strip_btn: gtk::Button,
     timer_btn: gtk::Button,
     grid_btn: gtk::Button,
     hist_btn: gtk::Button,
     hist: RefCell<Vec<u32>>,
     // when each hint (a badge's description) was last shown, so one that flickers is said once
     hint_at: RefCell<HashMap<&'static str, Instant>>,
+    // a hint that came while the adjust panel was up, to say once it has gone
+    hint_pending: RefCell<Option<(String, String)>>,
     burst_btn: gtk::Button,
     flash_btn: gtk::Button,
     wb_btn: gtk::Button,
@@ -705,27 +738,9 @@ struct App {
     countdown: gtk::Label,
 }
 
-// the double-tap presets: short caption, name, what it does
-const PRESETS: &[(&str, &str, &str)] = &[
-    ("OFF", "No preset", "Choose one in Settings: what a double tap on the touch strip switches to."),
-    ("DAY", "Daylight", "ISO priority at ISO 100, no compensation, no flash."),
-    ("ACT", "Action", "Shutter priority at 1/1000, burst of three."),
-    ("LOW", "Low light", "Auto with stacked capture and +1 EV."),
-    ("PORT", "Portrait", "Auto at 70 mm, no compensation."),
-];
-
-// what was set before a preset, to go back to
-#[derive(Clone, Copy)]
-struct PresetSnap {
-    mode: Mode,
-    iso: f64,
-    shutter: f64,
-    ev: f64,
-    flash: u8,
-    burst: usize,
-    stacked: bool,
-    zoom: f64,
-}
+// what the touch strip does: its functions (the double tap cycles through those chosen in the
+// settings, which the current mode allows), as the key's caption and the bubble's title
+const STRIP_FNS: [(&str, &str); 4] = [("ZOOM", "Zoom"), ("ISO", "ISO"), ("TIME", "Shutter"), ("EV", "Exposure compensation")];
 
 const MODE_NAMES: [(&str, &str); 4] = [
     ("Auto", "The camera chooses everything; you can still adjust EV."),
@@ -950,7 +965,12 @@ fn exposure_spec(dial: Dial) -> ruler::Spec {
             .collect(),
         Dial::Ev => (-9..=9).map(|e| tick(ev_pos(e), (e % 3 == 0).then(|| fmt_ev(e)))).collect(),
     };
-    ruler::Spec { ticks, px_per_unit: 520.0, dir: 1.0 }
+    let px_per_unit = match dial {
+        Dial::Iso => 520.0,
+        Dial::Shutter => 1300.0,
+        Dial::Ev => 560.0,
+    };
+    ruler::Spec { ticks, px_per_unit, dir: 1.0 }
 }
 
 // the zoom's: focal lengths on a log scale, the primes labelled (they are what the zoom snaps to)
@@ -1115,9 +1135,15 @@ impl App {
         icons::set_key(&self.meter_btn, icons::METER[st.metering as usize], ["CTR", "SPOT", "ALL"][st.metering as usize]);
         icons::set_key(&self.geo_btn, if st.geotag { icons::GEO } else { icons::GEO_OFF }, if st.geotag { "ON" } else { "OFF" });
         set_class(&self.geo_btn, "on", st.geotag);
-        icons::set_key(&self.preset_btn, icons::PRESET, PRESETS[st.preset].0);
-        set_class(&self.preset_btn, "on", st.preset_prev.is_some());
+        icons::set_key(&self.strip_btn, icons::STRIP, STRIP_FNS[st.strip_fn].0);
+        set_class(&self.strip_btn, "on", st.strip_fn != 0);
         set_class(&self.enc_turn[2], "gone", st.mode == Mode::Manual);
+        for (k, key) in self.keys.iter().enumerate() {
+            let pin = st.pinned >> k & 1 == 1;
+            set_class(key, "pinned", pin);
+            set_class(key, "stowed", self.stowed.get() && !pin);
+            key.set_can_target(!(self.stowed.get() && !pin));
+        }
         if st.caf {
             self.afd_btn.add_css_class("on");
         } else {
@@ -1312,7 +1338,7 @@ impl App {
             Tool::Afd => &self.afd_btn,
             Tool::Meter => &self.meter_btn,
             Tool::Geo => &self.geo_btn,
-            Tool::Preset => &self.preset_btn,
+            Tool::Strip => &self.strip_btn,
         }
     }
 
@@ -1325,7 +1351,7 @@ impl App {
                 self.choose(o, (now + 1) % choices.len());
             }
             None => match t {
-                Tool::Preset => return self.apply_preset(),
+                Tool::Strip => self.cycle_strip(),
                 _ => {
                     {
                         let mut st = self.st.borrow_mut();
@@ -1340,7 +1366,7 @@ impl App {
             },
         }
         let (title, text) = self.tool_note(t);
-        self.show_bubble(&title, &text, self.tool_button(t).upcast_ref(), BubbleSide::Left, 3);
+        self.show_bubble(&title, &text, 3);
     }
 
     // after a setting changes: the driver's side of it, the screen, the settings file
@@ -1466,7 +1492,9 @@ impl App {
     fn follow_orientation(&self, accel: &gtk::gio::DBusProxy) {
         let o = accel.cached_property("AccelerometerOrientation").and_then(|v| v.get::<String>());
         let q = o.as_deref().and_then(quarter_for);
-        eprintln!("l16-camera2: orientation {o:?} -> quarter {q:?} (was {})", self.quarter.get());
+        if q.is_some_and(|q| q != self.quarter.get()) {
+            eprintln!("l16-camera2: orientation {o:?} -> quarter {q:?} (was {})", self.quarter.get());
+        }
         let Some(q) = q else { return };
         self.apply_quarter(q);
     }
@@ -1800,9 +1828,16 @@ impl App {
             return true;
         }
         let free = fs.f_bavail as u64 * fs.f_frsize as u64;
-        let room = free > (frames as u64 + 1) * 300 << 20;
+        let need = (frames as u64 + 1) * 300 << 20;
+        let room = free > need;
         if !room {
-            self.show_status("waiting for photos to save", 2);
+            // more than the whole of /tmp: it will never fit, whatever is saving
+            let total = fs.f_blocks as u64 * fs.f_frsize as u64;
+            if need > total {
+                self.show_status(&format!("a burst of {frames} needs more room than there is: choose a smaller burst"), 4);
+            } else {
+                self.show_status("waiting for photos to save", 2);
+            }
         }
         room
     }
@@ -2299,6 +2334,12 @@ impl App {
     }
 
     fn poll(self: &Rc<Self>) {
+        if self.flyout_turn.has_css_class("off") {
+            let pending = self.hint_pending.borrow_mut().take();
+            if let Some((title, text)) = pending {
+                self.show_bubble(&title, &text, 4);
+            }
+        }
         let n = {
             let mut st = self.st.borrow_mut();
             st.polls = st.polls.wrapping_add(1);
@@ -2600,21 +2641,46 @@ impl App {
                     let st = self.st.borrow();
                     (st.strip_down, st.strip_x)
                 };
+                let function = self.strip_function();
                 if !down {
-                    let mut st = self.st.borrow_mut();
-                    st.strip_down = true;
-                    st.strip_t0 = Instant::now();
-                    st.strip_x0 = x;
-                    st.strip_x = x;
+                    {
+                        let mut st = self.st.borrow_mut();
+                        st.strip_down = true;
+                        st.strip_t0 = Instant::now();
+                        st.strip_x0 = x;
+                        st.strip_x = x;
+                    }
+                    if function != 0 {
+                        self.wheel_grab([Dial::Iso, Dial::Shutter, Dial::Ev][function - 1]);
+                    }
                 } else {
                     self.st.borrow_mut().strip_x = x;
-                    // OpenLight: a full strip length zooms 2.3x
-                    let raw = self.st.borrow().zoom_raw;
-                    self.zoom_gesture(raw * 2.3f64.powf((x - last) as f64 / STRIP_LEN));
+                    if function == 0 {
+                        // OpenLight: a full strip length zooms 2.3x
+                        let raw = self.st.borrow().zoom_raw;
+                        self.zoom_gesture(raw * 2.3f64.powf((x - last) as f64 / STRIP_LEN));
+                    } else {
+                        // a full strip length is most of the value's range; to the right for more
+                        // (a greater position is a lower value)
+                        let dial = [Dial::Iso, Dial::Shutter, Dial::Ev][function - 1];
+                        let (pos, inverse) = {
+                            let st = self.st.borrow();
+                            (
+                                match dial {
+                                    Dial::Iso => st.iso,
+                                    Dial::Shutter => st.shutter,
+                                    Dial::Ev => st.ev,
+                                },
+                                if st.inverse_wheel { -1.0 } else { 1.0 },
+                            )
+                        };
+                        self.set_dial(dial, pos - inverse * (x - last) as f64 / STRIP_LEN * 0.8);
+                    }
                 }
             }
             input::Ev::StripTouch(true) => {}
             input::Ev::StripTouch(false) => {
+                let function = self.strip_function();
                 let (tap, x0) = {
                     let mut st = self.st.borrow_mut();
                     st.strip_down = false;
@@ -2622,13 +2688,16 @@ impl App {
                         && (st.strip_x - st.strip_x0).abs() < 30;
                     (tap, st.strip_x0)
                 };
-                // taps on the ends step between the primes
-                if tap && x0 < 100 {
+                if function != 0 {
+                    self.wheel_release();
+                }
+                // taps on the ends step between the primes (as the zoom)
+                if tap && x0 < 100 && function == 0 {
                     self.step_prime(false);
-                } else if tap && x0 > 700 {
+                } else if tap && x0 > 700 && function == 0 {
                     self.step_prime(true);
-                } else if tap {
-                    // a double tap in the middle: the chosen preset (and back)
+                } else if tap && (100..=700).contains(&x0) {
+                    // a double tap in the middle: the strip's next function
                     let double = {
                         let mut st = self.st.borrow_mut();
                         let double = st.strip_tap_at.is_some_and(|t| t.elapsed() < Duration::from_millis(420));
@@ -2636,7 +2705,7 @@ impl App {
                         double
                     };
                     if double {
-                        self.apply_preset();
+                        self.cycle_strip();
                     }
                 }
             }
@@ -2897,13 +2966,15 @@ impl App {
                 self.wheels.configure(key, || exposure_spec(dial));
                 self.wheels.set(pos);
                 self.flyout_unit.set(dial_name(dial));
+                self.flyout_suffix.set("");
                 self.flyout_anim.set(&self.flyout, &value, 1.0 - pos);
                 shown = Some(dial_index(dial) as u8);
             } else if st.zoom_wheel_until.is_some_and(|t| Instant::now() < t) {
                 let pos = (st.zoom / ZOOM_MIN).ln();
                 self.wheels.configure(20, zoom_spec);
                 self.wheels.set(pos);
-                self.flyout_unit.set("MM");
+                self.flyout_unit.set("FOCAL LENGTH");
+                self.flyout_suffix.set("mm");
                 self.flyout_anim.set(&self.flyout, &format!("{:.0}", st.zoom), pos);
                 shown = Some(3);
             }
@@ -2960,21 +3031,16 @@ impl App {
         }
     }
 
-    // a bubble with @title and @text beside @anchor (to its left or right), for @secs
-    fn show_bubble(self: &Rc<Self>, title: &str, text: &str, anchor: &gtk::Widget, side: BubbleSide, secs: u64) {
+    // a bubble with @title and @text, centred over the preview, for @secs
+    fn show_bubble(self: &Rc<Self>, title: &str, text: &str, secs: u64) {
         self.bubble_title.set_text(title);
         self.bubble_text.set_text(text);
         self.bubble_text.set_visible(!text.is_empty());
-        let Some(b) = anchor.compute_bounds(&self.root) else { return };
+        let Some(b) = self.view.compute_bounds(&self.root) else { return };
         let (_, nat) = self.bubble_card.preferred_size();
         let (w, h) = if self.quarter.get() == 0 { (nat.width() as f32, nat.height() as f32) } else { (nat.height() as f32, nat.width() as f32) };
-        let x = match side {
-            BubbleSide::Left => b.x() - w - 10.0,
-            BubbleSide::Right => b.x() + b.width() + 10.0,
-        };
-        let max_y = (self.root.height() as f32 - h - 6.0).max(6.0);
-        self.bubble_turn.set_margin_start(x.max(6.0) as i32);
-        self.bubble_turn.set_margin_top((b.y() + (b.height() - h) / 2.0).clamp(6.0, max_y) as i32);
+        self.bubble_turn.set_margin_start((b.x() + (b.width() - w) / 2.0).max(6.0) as i32);
+        self.bubble_turn.set_margin_top((b.y() + (b.height() - h) / 2.0).max(6.0) as i32);
         set_class(&self.bubble_turn, "off", false);
         let a = self.clone();
         let id = glib::timeout_add_local_once(Duration::from_secs(secs), move || {
@@ -2992,7 +3058,11 @@ impl App {
             let fresh = self.hint_at.borrow().get(key).is_none_or(|t| t.elapsed() > Duration::from_secs(30));
             if fresh {
                 self.hint_at.borrow_mut().insert(key, Instant::now());
-                self.show_bubble(title, text, badge.upcast_ref(), BubbleSide::Right, 4);
+                if self.flyout_turn.has_css_class("off") {
+                    self.show_bubble(title, text, 4);
+                } else {
+                    *self.hint_pending.borrow_mut() = Some((title.to_string(), text.to_string()));
+                }
             }
         }
         badge.set_visible(on);
@@ -3019,53 +3089,97 @@ impl App {
             Tool::Afd => if st.caf { s("Continuous focus on", "It refocuses when the scene changes.") } else { s("Continuous focus off", "It focuses when you tap.") },
             Tool::Meter => [s("Centre-weighted", "It meters the middle of the frame."), s("Touch metering", "It meters where you tap."), s("Whole frame", "It meters the whole frame.")][st.metering as usize].clone(),
             Tool::Geo => if st.geotag { s("Geotag on", "Photos record where they were taken.") } else { s("Geotag off", "Photos carry no location.") },
-            Tool::Preset => { let (_, name, text) = PRESETS[st.preset]; s(name, text) }
+            Tool::Strip => (format!("Touch strip: {}", STRIP_FNS[st.strip_fn].1), "Slide along it to change this. Double tap it to switch.".to_string()),
         }
     }
 
-    // the double-tap preset on (the settings before it kept), or off again
-    fn apply_preset(self: &Rc<Self>) {
-        let idx = self.st.borrow().preset;
-        if idx == 0 {
-            let (_, name, text) = PRESETS[0];
-            self.show_bubble(name, text, self.preset_btn.upcast_ref(), BubbleSide::Left, 4);
+    // what the strip does now: its function, or zoom when the mode no longer lets you set it
+    fn strip_function(&self) -> usize {
+        let st = self.st.borrow();
+        match st.strip_fn {
+            1 if !st.mode.fixes_iso() => 0,
+            2 if !st.mode.fixes_shutter() => 0,
+            3 if st.mode == Mode::Manual => 0,
+            f => f,
+        }
+    }
+
+    // a double tap on the strip (or its key): the next of the chosen functions that the mode allows
+    fn cycle_strip(self: &Rc<Self>) {
+        let (cur, set) = (self.strip_function(), self.st.borrow().strip_set);
+        let mode = self.st.borrow().mode;
+        let allowed = |k: usize| {
+            set >> k & 1 == 1
+                && match k {
+                    1 => mode.fixes_iso(),
+                    2 => mode.fixes_shutter(),
+                    3 => mode != Mode::Manual,
+                    _ => true,
+                }
+        };
+        let next = (1..=4).map(|d| (cur + d) % 4).find(|&k| allowed(k)).unwrap_or(0);
+        self.st.borrow_mut().strip_fn = next;
+        self.refresh();
+        self.buzz(15);
+        self.show_bubble(&format!("Touch strip: {}", STRIP_FNS[next].1), "Slide along it to change this. Double tap it to switch.", 3);
+    }
+
+    // ---- the controls swiped away, pinned keys, the system panel
+
+    // the unpinned keys stowed (slid right and faded) or back; the pinned ones stay
+    fn apply_stow(&self) {
+        let (pinned, stowed) = (self.st.borrow().pinned, self.stowed.get());
+        for (k, key) in self.keys.iter().enumerate() {
+            let pin = pinned >> k & 1 == 1;
+            set_class(key, "pinned", pin);
+            let hide = stowed && !pin;
+            set_class(key, "stowed", hide);
+            key.set_can_target(!hide);
+        }
+    }
+
+    fn set_stowed(self: &Rc<Self>, on: bool) {
+        if self.stowed.replace(on) == on {
             return;
         }
-        let back = self.st.borrow_mut().preset_prev.take();
-        let zoom = match back {
-            Some(b) => {
-                let mut st = self.st.borrow_mut();
-                (st.mode, st.iso, st.shutter, st.ev, st.flash, st.burst, st.stacked) = (b.mode, b.iso, b.shutter, b.ev, b.flash, b.burst, b.stacked);
-                b.zoom
-            }
-            None => {
-                let mut st = self.st.borrow_mut();
-                st.preset_prev = Some(PresetSnap {
-                    mode: st.mode, iso: st.iso, shutter: st.shutter, ev: st.ev, flash: st.flash,
-                    burst: st.burst, stacked: st.stacked, zoom: st.zoom,
-                });
-                st.flash = 0;
-                st.ev = ev_pos(0);
-                let mut zoom = st.zoom;
-                match idx {
-                    1 => { st.mode = Mode::Iso; st.iso = iso_pos(ISO_MIN); }
-                    2 => { st.mode = Mode::Shutter; st.shutter = secs_pos(1.0 / 1000.0); st.burst = 1; }
-                    3 => { st.mode = Mode::Auto; st.stacked = true; st.ev = ev_pos(3); }
-                    _ => { st.mode = Mode::Auto; zoom = 70.0; }
-                }
-                zoom
-            }
+        self.apply_stow();
+        self.buzz(10);
+        if on {
+            self.show_bubble("Controls hidden", "Swipe left to bring them back. Hold a key to pin it, so it stays.", 4);
+        }
+    }
+
+    fn toggle_pin(self: &Rc<Self>, k: usize) {
+        let now = {
+            let mut st = self.st.borrow_mut();
+            st.pinned ^= 1 << k;
+            st.pinned >> k & 1 == 1
         };
-        self.set_zoom(zoom);
-        let (flash, meter) = { let st = self.st.borrow(); (st.flash, st.metering) };
-        let _ = self.ctl_tx.send((ccb::FLASH, flash as i32));
-        let _ = self.ctl_tx.send((ccb::METERING, meter as i32));
-        self.apply_exposure();
+        self.buzz(20);
         self.refresh();
-        let on = self.st.borrow().preset_prev.is_some();
-        let (_, name, text) = PRESETS[idx];
-        let (title, text) = if on { (name.to_string(), text.to_string()) } else { ("Back to your settings".to_string(), format!("{name} is off.")) };
-        self.show_bubble(&title, &text, self.preset_btn.upcast_ref(), BubbleSide::Left, 4);
+        if now {
+            self.show_bubble("Pinned", "It stays when you swipe the controls away.", 3);
+        } else {
+            self.show_bubble("Unpinned", "It hides with the other controls.", 3);
+        }
+    }
+
+    // settings and close: in by a swipe from the left edge, away after a few seconds
+    fn show_system(self: &Rc<Self>, on: bool) {
+        set_class(&self.system_turn, "sys-hidden", !on);
+        self.system_turn.set_can_target(on);
+        if let Some(id) = self.system_timer.borrow_mut().take() {
+            id.remove();
+        }
+        if on {
+            self.buzz(10);
+            let a = self.clone();
+            let id = glib::timeout_add_local_once(Duration::from_secs(6), move || {
+                *a.system_timer.borrow_mut() = None;
+                a.show_system(false);
+            });
+            *self.system_timer.borrow_mut() = Some(id);
+        }
     }
 
     fn dial_active(&self, dial: Dial) -> bool {
@@ -3164,9 +3278,21 @@ impl App {
         cr.set_source_rgba(1.0, 1.0, 1.0, 0.5);
         text(cr, self.flyout_unit.get(), 18.0, 20.0, 14.0, 0.0);
         let value = self.flyout_anim.text();
-        let pitch = dots::fit(&value, w - 44.0, 5.4);
+        // a suffix (mm) sits beside the number, which then moves left to keep the pair centred
+        let suffix = self.flyout_suffix.get();
+        cr.set_font_size(22.0);
+        let sw = if suffix.is_empty() { 0.0 } else { cr.text_extents(suffix).map_or(0.0, |e| e.x_advance()) + 12.0 };
+        let pitch = dots::fit(&value, w - 44.0 - sw, 5.4);
+        let n = value.chars().count() as f64;
+        let dw = (6.0 * n - 1.0).max(0.0) * pitch;
         let top = 28.0 + (h - 28.0 - 7.0 * pitch) / 2.0 - 2.0;
-        self.flyout_anim.draw(cr, w / 2.0, top, pitch, (accent().0, accent().1, accent().2, 1.0));
+        let cx = w / 2.0 - sw / 2.0;
+        self.flyout_anim.draw(cr, cx, top, pitch, (accent().0, accent().1, accent().2, 1.0));
+        if !suffix.is_empty() {
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.7);
+            cr.move_to(cx + dw / 2.0 + 12.0, top + 7.0 * pitch - 1.0);
+            let _ = cr.show_text(suffix);
+        }
     }
 
     // the panel, in place: beside the encoder of a dial (to its right, on the preview, where the
@@ -3453,7 +3579,7 @@ fn build(gapp: &gtk::Application) {
     flyout_turn.add_css_class("off");
     let left = gtk::Box::new(gtk::Orientation::Vertical, 10);
     left.set_valign(gtk::Align::Center);
-    left.set_margin_start(10);
+    left.set_margin_start(26);
     left.set_margin_end(8);
     left.set_margin_top(36);
     let enc_turn: Vec<Rotator> = encoders.iter().map(|c| turn(c.upcast_ref())).collect();
@@ -3525,14 +3651,16 @@ fn build(gapp: &gtk::Application) {
     let assist_btn = icons::button(icons::ASSIST_OFF, "");
     let meter_btn = icons::button(icons::METER[0], "");
     let geo_btn = icons::button(icons::GEO_OFF, "");
-    let preset_btn = icons::button(icons::PRESET, "");
+    let strip_btn = icons::button(icons::STRIP, "");
+    let mut keys: Vec<gtk::Button> = Vec::new();
     for (k, b) in [
         &mode_btn, &flash_btn, &wb_btn, &timer_btn, &grid_btn, &hist_btn, &assist_btn, &burst_btn, &afd_btn, &meter_btn,
-        &geo_btn, &preset_btn,
+        &geo_btn, &strip_btn,
     ]
     .into_iter()
     .enumerate()
     {
+        keys.push(b.clone());
         b.add_css_class("key");
         b.add_css_class("spin");
         key_grid.attach(b, (k % 3) as i32, (k / 3) as i32, 1, 1);
@@ -3543,12 +3671,19 @@ fn build(gapp: &gtk::Application) {
         b.add_css_class("flat-white");
         b.add_css_class("spin");
     }
-    let top_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let top_fill = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    top_fill.set_hexpand(true);
-    top_row.append(&top_fill);
-    top_row.append(&settings_btn);
-    top_row.append(&close_btn);
+    // the system panel (settings, close): tucked away, brought in by a swipe from the left edge
+    let system_card = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    system_card.add_css_class("system");
+    system_card.append(&settings_btn);
+    system_card.append(&close_btn);
+    let system_turn = turn(system_card.upcast_ref());
+    system_turn.set_halign(gtk::Align::Start);
+    system_turn.set_valign(gtk::Align::Start);
+    system_turn.set_margin_start(10);
+    system_turn.set_margin_top(56);
+    system_turn.add_css_class("sys");
+    system_turn.add_css_class("sys-hidden");
+    system_turn.set_can_target(false);
     // the mode picker: a card of rows, each the mode's icon and full name
     let picker_card = gtk::Box::new(gtk::Orientation::Vertical, 2);
     picker_card.add_css_class("picker");
@@ -3596,7 +3731,7 @@ fn build(gapp: &gtk::Application) {
     let right = gtk::Box::new(gtk::Orientation::Vertical, 10);
     right.set_size_request(244, -1);
     right.set_margin_end(10);
-    right.set_margin_top(6);
+    right.set_margin_top(10);
     right.set_margin_bottom(10);
     let spacer = || {
         let s = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -3611,7 +3746,6 @@ fn build(gapp: &gtk::Application) {
     shutter_row.append(&thumb_box);
     shutter_row.append(&shutter_fill);
     shutter_row.append(&shutter);
-    right.append(&top_row);
     right.append(&key_grid);
     right.append(&spacer());
     right.append(&shutter_row);
@@ -3762,7 +3896,7 @@ fn build(gapp: &gtk::Application) {
     let battery_label = gtk::Label::new(None);
     storage_label.set_halign(gtk::Align::Start);
     battery_label.set_halign(gtk::Align::Start);
-    let status_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    let status_box = gtk::Box::new(gtk::Orientation::Horizontal, 20);
     status_box.add_css_class("device-status");
     status_box.append(&storage_label);
     status_box.append(&battery_label);
@@ -3825,6 +3959,7 @@ fn build(gapp: &gtk::Application) {
     root.add_overlay(&countdown);
     root.add_overlay(&burst_screen);
     root.add_overlay(&flyout_turn);
+    root.add_overlay(&system_turn);
     root.add_overlay(&picker_turn);
     root.add_overlay(&bubble_turn);
     root.add_overlay(&battery_screen);
@@ -3880,8 +4015,9 @@ fn build(gapp: &gtk::Application) {
             assist: 0,
             accent: 0,
             sparkle: true,
-            preset: 0,
-            preset_prev: None,
+            pinned: 1,
+            strip_fn: 0,
+            strip_set: 0b1111,
             strip_tap_at: None,
             busy: false,
             counting: false,
@@ -3990,6 +4126,7 @@ fn build(gapp: &gtk::Application) {
         flyout_turn: flyout_turn.clone(),
         flyout_anim: NumAnim::new(),
         flyout_unit: Cell::new(""),
+        flyout_suffix: Cell::new(""),
         flyout_at: Cell::new(255),
         css: provider.clone(),
         root: root.clone(),
@@ -4012,6 +4149,10 @@ fn build(gapp: &gtk::Application) {
         shake_badge,
         preview_gain: Cell::new(1.0),
         mode_btn,
+        keys,
+        stowed: Cell::new(false),
+        system_turn,
+        system_timer: RefCell::new(None),
         picker_turn,
         picker_card,
         picker_rows,
@@ -4023,9 +4164,10 @@ fn build(gapp: &gtk::Application) {
         bubble_timer: RefCell::new(None),
         enc_turn,
         hint_at: RefCell::new(HashMap::new()),
+        hint_pending: RefCell::new(None),
         meter_btn,
         geo_btn,
-        preset_btn,
+        strip_btn,
         timer_btn,
         grid_btn,
         hist_btn,
@@ -4119,6 +4261,10 @@ fn build(gapp: &gtk::Application) {
             a.close_picker();
             return;
         }
+        if !a.system_turn.has_css_class("sys-hidden") {
+            a.show_system(false);
+            return;
+        }
         a.focus(Some((x, y)));
     });
     app.view.add_controller(click);
@@ -4174,6 +4320,49 @@ fn build(gapp: &gtk::Application) {
     click.connect_released(move |_, _, _, _| a.shutter_pressed());
     app.shutter.add_controller(click);
 
+    // swipe right on the controls: the unpinned keys go (left: back); a long press pins a key
+    let swipe = gtk::GestureDrag::new();
+    swipe.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let done = Rc::new(Cell::new(false));
+    let d = done.clone();
+    swipe.connect_drag_begin(move |_, _, _| d.set(false));
+    let a = app.clone();
+    swipe.connect_drag_update(move |g, dx, dy| {
+        if !done.get() && dx.abs() > 56.0 && dx.abs() > dy.abs() * 1.6 {
+            done.set(true);
+            g.set_state(gtk::EventSequenceState::Claimed);
+            a.set_stowed(dx > 0.0);
+        }
+    });
+    right.add_controller(swipe);
+    for (k, key) in app.keys.iter().enumerate() {
+        let lp = gtk::GestureLongPress::new();
+        let a = app.clone();
+        lp.connect_pressed(move |g, _, _| {
+            g.set_state(gtk::EventSequenceState::Claimed);
+            a.toggle_pin(k);
+        });
+        key.add_controller(lp);
+    }
+    // a swipe in from the left edge: the system panel
+    let edge = gtk::GestureDrag::new();
+    edge.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let (from_edge, shown) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
+    let f = from_edge.clone();
+    let sh = shown.clone();
+    edge.connect_drag_begin(move |_, x, _| {
+        f.set(x < 24.0);
+        sh.set(false);
+    });
+    let a = app.clone();
+    edge.connect_drag_update(move |g, dx, dy| {
+        if from_edge.get() && !shown.get() && dx > 44.0 && dx > dy.abs() * 1.5 {
+            shown.set(true);
+            g.set_state(gtk::EventSequenceState::Claimed);
+            a.show_system(true);
+        }
+    });
+    root.add_controller(edge);
     // the mode key opens its picker; a row sets the mode. The close key closes the app as the
     // window does
     let a = app.clone();
@@ -4191,7 +4380,7 @@ fn build(gapp: &gtk::Application) {
             a.set_mode(mode);
             a.close_picker();
             let (name, text) = MODE_NAMES[mode.index()];
-            a.show_bubble(name, text, a.mode_btn.upcast_ref(), BubbleSide::Left, 3);
+            a.show_bubble(name, text, 3);
         });
     }
     let w = window.clone();
@@ -4203,6 +4392,7 @@ fn build(gapp: &gtk::Application) {
     }
     let a = app.clone();
     settings_btn.connect_clicked(move |_| {
+        a.show_system(false);
         a.chooser.set_visible(false);
         a.fill_settings();
         a.settings_page.set_visible(true);
@@ -4437,11 +4627,13 @@ fn build(gapp: &gtk::Application) {
                     "zoom" => a.set_zoom(70.0),
                     "portrait" => a.apply_quarter(1),
                     "picker" => a.open_picker(),
+                    "stow" => a.set_stowed(true),
+                    "system" => a.show_system(true),
                     "bubble" => {
                         let (t, x) = a.tool_note(Tool::Assist);
-                        a.show_bubble(&t, &x, a.assist_btn.upcast_ref(), BubbleSide::Left, 600);
+                        a.show_bubble(&t, &x, 600);
                     }
-                    "hint" => a.show_bubble("Hold steady", "The shutter is slow enough that a shaky hand will blur the photo. Brace the camera, or use a tripod.", a.encoders[0].upcast_ref(), BubbleSide::Right, 600),
+                    "hint" => a.show_bubble("Hold steady", "The shutter is slow enough that a shaky hand will blur the photo. Brace the camera, or use a tripod.", 600),
                     "zoombar" => {
                         a.set_zoom(50.0);
                         a.st.borrow_mut().zoom_wheel_until = Some(Instant::now() + Duration::from_secs(60));

@@ -44,7 +44,7 @@ pub const MODES: [char; 4] = ['\u{f0068}', '\u{f0104}', '\u{f0109}', '\u{f062e}'
 pub const METER: [char; 3] = ['\u{f07a2}', '\u{f07a5}', '\u{f07a3}'];
 pub const GEO: char = '\u{f034e}';
 pub const GEO_OFF: char = '\u{f0351}';
-pub const PRESET: char = '\u{f04e1}';
+pub const STRIP: char = '\u{f04e1}';
 pub const CHEVRON_DOWN: char = '\u{f0140}';
 // Lightbox's menu and selection
 pub const MORE: char = '\u{f01d9}'; // dots-vertical

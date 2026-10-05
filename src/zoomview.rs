@@ -1,5 +1,9 @@
 // The preview: the camera's paintable, filling the widget, cropped in by a zoom factor
 // (digital zoom between the modules' focal lengths). Its digital gain is the software ISP's.
+//
+// Focus peaking and zebras are worked out on a small copy of the frame (OVERLAY_W wide), a few
+// times a second, into a texture of their own that is drawn over the preview scaled up: the
+// per-frame cost is a textured quad, not several passes at the screen's size.
 
 use gtk::gdk;
 use gtk::glib;
@@ -20,6 +24,9 @@ mod imp {
         // focus peaking and zebras, drawn over the preview by render nodes (GPU): 0 off,
         // bit 0 peaking, bit 1 zebras
         pub assist: Cell<u8>,
+        // the assist's overlay, as of its last refresh, and the timer that makes it
+        pub overlay: RefCell<Option<gdk::Texture>>,
+        pub overlay_timer: RefCell<Option<glib::SourceId>>,
     }
 
     #[glib::object_subclass]
@@ -52,14 +59,9 @@ mod imp {
             snapshot.save();
             snapshot.translate(&graphene::Point::new(((w - pw) / 2.0) as f32, ((h - ph) / 2.0) as f32));
             p.snapshot(snapshot, pw, ph);
-            let assist = self.assist.get();
-            if assist != 0 {
-                let rect = graphene::Rect::new(0.0, 0.0, pw as f32, ph as f32);
-                if assist & 1 != 0 {
-                    peaking(snapshot, &p, &rect);
-                }
-                if assist & 2 != 0 {
-                    zebras(snapshot, &p, &rect);
+            if self.assist.get() != 0 {
+                if let Some(t) = self.overlay.borrow().as_ref() {
+                    snapshot.append_scaled_texture(t, gsk::ScalingFilter::Linear, &graphene::Rect::new(0.0, 0.0, pw as f32, ph as f32));
                 }
             }
             snapshot.restore();
@@ -67,6 +69,9 @@ mod imp {
         }
     }
 }
+
+const OVERLAY_W: f64 = 360.0;
+const OVERLAY_EVERY: u64 = 110; // ms
 
 // The colour matrix node clamps what it makes to 0..1, so a steep gain with an offset is a
 // threshold: bright (or, below, edgy) enough is white, the rest black. The same weight for
@@ -87,11 +92,11 @@ fn threshold(snapshot: &gtk::Snapshot, gain: f32, at: f32) {
 fn peaking(snapshot: &gtk::Snapshot, p: &gdk::Paintable, rect: &graphene::Rect) {
     let (w, h) = (rect.width() as f64, rect.height() as f64);
     snapshot.push_mask(gsk::MaskMode::Luminance);
-    threshold(snapshot, 14.0, 0.035);
+    threshold(snapshot, 16.0, 0.022);
     snapshot.push_blend(gsk::BlendMode::Difference);
     p.snapshot(snapshot, w, h);
     snapshot.pop();
-    snapshot.push_blur(1.5);
+    snapshot.push_blur(0.8);
     p.snapshot(snapshot, w, h);
     snapshot.pop();
     snapshot.pop(); // the blend
@@ -112,7 +117,7 @@ fn zebras(snapshot: &gtk::Snapshot, p: &gdk::Paintable, rect: &graphene::Rect) {
     snapshot.append_repeating_linear_gradient(
         rect,
         &graphene::Point::new(0.0, 0.0),
-        &graphene::Point::new(14.0, 14.0),
+        &graphene::Point::new(5.0, 5.0),
         &[
             gsk::ColorStop::new(0.0, red),
             gsk::ColorStop::new(0.5, red),
@@ -153,9 +158,56 @@ impl ZoomView {
     }
 
     pub fn set_assist(&self, assist: u8) {
-        if self.imp().assist.replace(assist) != assist {
-            self.queue_draw();
+        let imp = self.imp();
+        if imp.assist.replace(assist) == assist {
+            return;
         }
+        if assist == 0 {
+            imp.overlay.replace(None);
+            if let Some(id) = imp.overlay_timer.take() {
+                id.remove();
+            }
+        } else if imp.overlay_timer.borrow().is_none() {
+            let weak = self.downgrade();
+            let id = glib::timeout_add_local(std::time::Duration::from_millis(OVERLAY_EVERY), move || {
+                let Some(v) = weak.upgrade() else { return glib::ControlFlow::Break };
+                if v.imp().assist.get() == 0 {
+                    v.imp().overlay_timer.replace(None);
+                    return glib::ControlFlow::Break;
+                }
+                v.refresh_overlay();
+                glib::ControlFlow::Continue
+            });
+            imp.overlay_timer.replace(Some(id));
+            self.refresh_overlay();
+        }
+        self.queue_draw();
+    }
+
+    // the overlay again, from the preview's latest frame, at a small size
+    fn refresh_overlay(&self) {
+        let imp = self.imp();
+        let Some(p) = imp.paintable.borrow().clone() else { return };
+        let ar = p.intrinsic_aspect_ratio();
+        let Some(renderer) = self.native().and_then(|n| n.renderer()) else { return };
+        if ar <= 0.0 {
+            return;
+        }
+        let rect = graphene::Rect::new(0.0, 0.0, OVERLAY_W as f32, (OVERLAY_W / ar) as f32);
+        let snapshot = gtk::Snapshot::new();
+        // (not to the edge: the blur there sees nothing beyond, and would outline it)
+        snapshot.push_clip(&rect.inset_r(3.0, 3.0));
+        let assist = imp.assist.get();
+        if assist & 1 != 0 {
+            peaking(&snapshot, &p, &rect);
+        }
+        if assist & 2 != 0 {
+            zebras(&snapshot, &p, &rect);
+        }
+        snapshot.pop();
+        let Some(node) = snapshot.to_node() else { return };
+        imp.overlay.replace(Some(renderer.render_texture(&node, Some(&rect))));
+        self.queue_draw();
     }
 
     pub fn zoom(&self) -> f64 {
