@@ -167,8 +167,8 @@ button.flat-white:active { background: rgba(255,255,255,0.10); }
 .settings row, .chooser row { padding: 16px 32px; border-bottom: 1px solid rgba(255,255,255,0.08);
     background: none; }
 .settings row:active, .chooser row:active { background: rgba(255,255,255,0.08); }
-.set-title { color: #f2f2ee; font-size: 17px; font-weight: 600; }
-.set-sub { color: rgba(242,242,238,0.50); font-size: 13px; }
+.set-title { font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; color: #f2f2ee; font-size: 17px; font-weight: 600; }
+.set-sub { font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; color: rgba(242,242,238,0.50); font-size: 13px; }
 .set-value { color: @accent; font-size: 15px; font-weight: 700; }
 .set-chevron { color: rgba(242,242,238,0.45); font-size: 20px; }
 .settings switch { background: rgba(255,255,255,0.18); border: none; }
@@ -192,8 +192,8 @@ window.rot-ccw .spin { transform: rotate(-90deg); }
 .pick-row:active { background: rgba(255,255,255,0.10); }
 .pick-row.on { background: @accent; color: #0b0b0c; }
 .bubble { background: #141416; border: 1px solid alpha(@accent, 0.55); border-radius: 12px; padding: 12px 16px; }
-.bubble-title { color: @accent; font-size: 17px; font-weight: 700; }
-.bubble-text { color: rgba(242,242,238,0.82); font-size: 15px; }
+.bubble-title { color: @accent; font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 17px; font-weight: 700; }
+.bubble-text { color: rgba(242,242,238,0.82); font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 15px; }
 .enc-wrap { transition: opacity 240ms ease, transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .enc-wrap.gone { opacity: 0; transform: translateY(32px); }
 .key.stowed { opacity: 0; transform: translateX(44px); }
@@ -202,7 +202,7 @@ window.rot-ccw .spin { transform: rotate(-90deg); }
 .sys { transition: opacity 220ms ease, transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .sys.sys-hidden { opacity: 0; transform: translateX(-40px); }
 .pill { background: #141416; border: 1px solid alpha(@accent, 0.55); border-radius: 999px; padding: 6px 18px;
-    color: #f2f2ee; font-size: 16px; font-weight: 600; }
+    color: #f2f2ee; font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 16px; font-weight: 600; }
 .alert-icon { color: @accent; }
 ";
 
