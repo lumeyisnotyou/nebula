@@ -91,6 +91,11 @@ pub fn hooks(window: &gtk::ApplicationWindow) {
         screenshot(&w, &glib::user_cache_dir().join("l16-camera2-shot.png"));
         glib::ControlFlow::Continue
     });
+    // SIGUSR2: the shutter sparkle, without taking a photo
+    glib::unix_signal_add_local(libc::SIGUSR2, || {
+        crate::led::sparkle(crate::accent());
+        glib::ControlFlow::Continue
+    });
     if let Some(path) = std::env::var_os("L16_SHOT") {
         let w = window.clone();
         glib::timeout_add_local_once(Duration::from_millis(2500), move || {

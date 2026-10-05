@@ -16,6 +16,7 @@ mod gyro;
 mod haptics;
 mod icons;
 mod input;
+mod led;
 mod prox;
 mod rotate;
 mod ruler;
@@ -227,6 +228,7 @@ struct State {
     histogram: bool,
     assist: u8, // focus peaking (1) and zebras (2), as bits
     accent: usize, // ACCENTS' index
+    sparkle: bool, // a burst of light from the LED by the shutter button when a photo is taken
     preset: usize, // PRESETS' index: what a double tap on the strip switches to
     preset_prev: Option<PresetSnap>, // the settings before it did, while it is on
     strip_tap_at: Option<Instant>, // the last tap on the strip's middle
@@ -308,7 +310,7 @@ impl State {
         let mode = self.mode.short();
         format!(
             "mode={mode}\niso={}\nshutter={}\nev={}\nflash={}\ntimer={}\ngrid={}\nhistogram={}\nassist={}\nburst={}\n\
-             wb={}\nmetering={}\ncaf={}\nstacked={}\nexposure_info={}\ninverse_wheel={}\nhaptics={}\ncontinuous={}\nstrip_zoom={}\ntoolbar={}\ntool_cycle={}\nlens_warn={}\ndevice_status={}\npocket={}\ngeotag={}\naccent={}\npreset={}\n",
+             wb={}\nmetering={}\ncaf={}\nstacked={}\nexposure_info={}\ninverse_wheel={}\nhaptics={}\ncontinuous={}\nstrip_zoom={}\ntoolbar={}\ntool_cycle={}\nlens_warn={}\ndevice_status={}\npocket={}\ngeotag={}\naccent={}\npreset={}\nsparkle={}\n",
             self.iso,
             self.shutter,
             self.ev,
@@ -335,6 +337,7 @@ impl State {
             self.geotag as u8,
             self.accent,
             self.preset,
+            self.sparkle as u8,
         )
     }
 
@@ -371,6 +374,7 @@ impl State {
         self.device_status = flag("device_status", self.device_status);
         self.pocket = flag("pocket", self.pocket);
         self.geotag = flag("geotag", self.geotag);
+        self.sparkle = flag("sparkle", self.sparkle);
         self.preset = num("preset").map_or(self.preset, |v| (v as usize).min(PRESETS.len() - 1));
         self.accent = num("accent").map_or(self.accent, |v| (v as usize).min(ACCENTS.len() - 1));
     }
@@ -425,6 +429,11 @@ const SETTINGS: &[SettingRow] = &[
             |s| s.preset,
             |s, v| s.preset = v,
         ),
+    },
+    SettingRow {
+        title: "Shutter sparkle",
+        sub: "A burst of light from the LED by the shutter button when a photo is taken",
+        kind: SettingKind::Switch(|s| s.sparkle, |s, v| s.sparkle = v),
     },
     SettingRow {
         title: "Accent colour",
@@ -1801,6 +1810,9 @@ impl App {
     fn capture(self: &Rc<Self>) {
         self.hold_sleep();
         self.feedback("camera-shutter");
+        if self.st.borrow().sparkle {
+            led::sparkle(accent());
+        }
         let (zoom, burst, seq, dark, stacked) = {
             let mut st = self.st.borrow_mut();
             st.busy = true;
@@ -3867,6 +3879,7 @@ fn build(gapp: &gtk::Application) {
             histogram: false,
             assist: 0,
             accent: 0,
+            sparkle: true,
             preset: 0,
             preset_prev: None,
             strip_tap_at: None,
