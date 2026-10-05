@@ -1,5 +1,5 @@
-// The sparkle: a burst of light from the status LED by the shutter button when a photo is taken,
-// in the accent colour. The LED is the PMIC's multicolour LPG, which the charging-light service
+// The sparkle: one smooth beat of light from the status LED by the shutter button when a photo is
+// taken, in the accent colour. The LED is the PMIC's multicolour LPG, which the charging-light service
 // (light-lfc-led) also drives: its breathing pattern is a hardware pattern, so this saves what
 // the LED was doing (the pattern, or a plain brightness), plays the burst, and puts it back.
 //
@@ -15,9 +15,23 @@ use std::time::Duration;
 
 const LED: &str = "/sys/class/leds/rgb:status";
 const MAX: u32 = 511;
-// a quick flicker of three flashes, dying away
-const NODES: [u32; 12] = [0, MAX, 120, MAX, 200, MAX, MAX, 300, 140, 60, 20, 0];
-const STEP_MS: u64 = 45;
+// one beat: a smooth swell that rises fast and falls slower, in this many equal steps (the
+// LPG's pattern needs equal steps), the brightness on a squared curve as the charging light's
+const STEPS: usize = 21;
+const STEP_MS: u64 = 30;
+
+// the brightness nodes of the beat
+fn nodes() -> Vec<u32> {
+    (0..STEPS)
+        .map(|k| {
+            let x = k as f64 / (STEPS - 1) as f64;
+            // up over the first 28 %, down over the rest, each side a quarter sine
+            let e = if x < 0.28 { x / 0.28 } else { (1.0 - x) / 0.72 };
+            let e = (e * std::f64::consts::FRAC_PI_2).sin();
+            (MAX as f64 * e * e).round() as u32
+        })
+        .collect()
+}
 
 static BUSY: AtomicBool = AtomicBool::new(false);
 
@@ -63,12 +77,13 @@ fn run(rgb: (f64, f64, f64)) {
         let (pattern, repeat) = (read("hw_pattern"), read("repeat"));
         // each node: ramp to it over a step, hold it for none; the first pause is none
         let mut p = String::new();
-        for (k, v) in NODES.iter().enumerate() {
+        let nodes = nodes();
+        for (k, v) in nodes.iter().enumerate() {
             let t = if k == 0 { 0 } else { STEP_MS };
             p.push_str(&format!("{v} {t} {v} 0 "));
         }
         if write("repeat", "1") && write("hw_pattern", p.trim()) {
-            thread::sleep(Duration::from_millis(STEP_MS * NODES.len() as u64 + 120));
+            thread::sleep(Duration::from_millis(STEP_MS * STEPS as u64 + 120));
         }
         // back to what it was: the repeat first, then the pattern, as the service sets them
         write("repeat", repeat.as_deref().unwrap_or("-1"));
@@ -78,7 +93,8 @@ fn run(rgb: (f64, f64, f64)) {
     } else {
         // no pattern: brightness by hand, 15 ms apart, between the nodes
         let per = (STEP_MS / 15).max(1) as u32;
-        for pair in NODES.windows(2) {
+        let nodes = nodes();
+        for pair in nodes.windows(2) {
             for k in 0..per {
                 let v = pair[0] as f64 + (pair[1] as f64 - pair[0] as f64) * (k + 1) as f64 / per as f64;
                 write("brightness", &(v.round() as u32).to_string());

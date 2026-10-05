@@ -39,7 +39,6 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use canvas::Canvas;
-use dots::NumAnim;
 use rotate::Rotator;
 use ruler::Ruler;
 use zoomview::ZoomView;
@@ -57,7 +56,7 @@ const SHUTTER: &[&str] = &[
 ];
 const TIMERS: &[u32] = &[0, 3, 5, 10, 20];
 // OpenLight's burst modes (burst_3, burst_6)
-const BURSTS: &[u8] = &[1, 3, 6];
+const BURSTS: &[u8] = &[1, 3];
 // zoom stops: OpenLight's primes, with the L16's real 70 mm B modules
 const PRIMES: &[f64] = &[28.0, 35.0, 70.0, 150.0];
 const ZOOM_MIN: f64 = 28.0;
@@ -67,6 +66,9 @@ const ZOOM_MAX: f64 = 150.0;
 const MODULE_MM: [f64; 2] = [28.0, 70.0];
 // orange: what the photographer has set; green: in focus, fine; red: clipping, warnings
 // the accent colours the settings offer: name, CSS colour, and the same as RGB for the drawing code
+// the text is 15 % bigger than it was drawn at first (a 5-inch screen)
+const TEXT_SCALE: f64 = 1.15;
+
 const ACCENTS: &[(&str, &str, (f64, f64, f64))] = &[
     ("Blue", "#00B1ED", (0.0, 0.694, 0.929)),
     ("Orange", "@accent", (1.0, 0.353, 0.122)),
@@ -84,7 +86,27 @@ fn accent() -> (f64, f64, f64) {
 
 // the stylesheet for the accent @idx
 fn css(idx: usize) -> String {
-    format!("@define-color accent {};\n{CSS}", ACCENTS[idx.min(ACCENTS.len() - 1)].1)
+    format!("@define-color accent {};\n{}", ACCENTS[idx.min(ACCENTS.len() - 1)].1, scale_font_sizes(CSS, TEXT_SCALE))
+}
+
+// every "font-size: Npx" in @css scaled by @k
+fn scale_font_sizes(css: &str, k: f64) -> String {
+    let mut out = String::with_capacity(css.len() + 64);
+    let mut rest = css;
+    while let Some(i) = rest.find("font-size: ") {
+        let (head, tail) = rest.split_at(i + "font-size: ".len());
+        out.push_str(head);
+        let end = tail.find("px").unwrap_or(0);
+        match tail[..end].parse::<f64>() {
+            Ok(v) => {
+                out.push_str(&format!("{:.1}", v * k));
+                rest = &tail[end..];
+            }
+            Err(_) => rest = tail,
+        }
+    }
+    out.push_str(rest);
+    out
 }
 const STRIP_LEN: f64 = 768.0;
 // the right column's width, and what is left of it when the controls are stowed; the room the
@@ -111,9 +133,9 @@ button.flat-white:active { background: rgba(255,255,255,0.10); }
 .key { background: #151517; border: 1px solid rgba(255,255,255,0.09); box-shadow: none; outline: none;
     color: rgba(242,242,238,0.82); padding: 0; border-radius: 10px; min-width: 70px; min-height: 74px;
     font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
-    transition: background 120ms ease, color 120ms ease, box-shadow 160ms ease, opacity 220ms ease, transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+    transition: background 120ms ease, color 120ms ease, border-color 160ms ease, opacity 220ms ease, transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .key:active { background: #232327; }
-.key.on { color: @accent; box-shadow: inset 0 3px 0 @accent; }
+.key.on { color: @accent; background: alpha(@accent, 0.13); border-color: alpha(@accent, 0.75); }
 .zoom-pill { background: rgba(18,18,20,0.88); border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; padding: 3px; }
 .zoom-chip { background: none; border: none; box-shadow: none; outline: none; padding: 0; border-radius: 6px;
     color: rgba(242,242,238,0.75); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
@@ -304,6 +326,9 @@ struct State {
     live_iso: i32,
     live_secs: f64,
     strip_down: bool,
+    strip_active: bool,            // the finger has gone past the dead zone: a slide
+    strip_lock: usize,             // the function this touch began with
+    strip_slid_at: Option<Instant>, // when the last slide ended
     strip_x0: i32,
     strip_x: i32,
     strip_t0: Instant,
@@ -655,12 +680,12 @@ struct App {
     // the three encoders (ISO, shutter, EV) and what each was last drawn for (refresh)
     encoders: Vec<Canvas>,
     enc_shown: Cell<[u64; 3]>,
-    // their values, rolling from one to the next
-    enc_anim: Vec<Rc<NumAnim>>,
     // the big readout that opens beside an encoder while it is held, out from under the thumb
     flyout: Canvas,
     flyout_turn: Rotator,
-    flyout_anim: Rc<NumAnim>,
+    flyout_text: RefCell<String>,
+    flyout_cells: Cell<usize>,
+    shutter_flash: Cell<Option<Instant>>,
     flyout_unit: Cell<&'static str>,
     flyout_suffix: Cell<&'static str>, // after the number: "mm"
     // where the flyout was last placed (0-2 an encoder, 3 the zoom, 255 hidden)
@@ -872,7 +897,7 @@ fn module_for(zoom: f64) -> usize {
 fn text(cr: &cairo::Context, s: &str, x: f64, y: f64, size: f64, align: f64) {
     let layout = pangocairo::functions::create_layout(cr);
     let mut font = gtk::pango::FontDescription::from_string("Adwaita Mono, Droid Sans Mono, Monospace Bold");
-    font.set_absolute_size(size * gtk::pango::SCALE as f64);
+    font.set_absolute_size(size * TEXT_SCALE * gtk::pango::SCALE as f64);
     layout.set_font_description(Some(&font));
     layout.set_text(s);
     let (ink, _) = layout.pixel_extents();
@@ -1178,10 +1203,6 @@ impl App {
         let saved = st.saved();
         let busy = st.busy;
         let enc = [Dial::Iso, Dial::Shutter, Dial::Ev].map(|d| encoder_key(&st, d));
-        for (k, d) in [Dial::Iso, Dial::Shutter, Dial::Ev].into_iter().enumerate() {
-            let (_, text, frac, _) = encoder_shows(&st, d);
-            self.enc_anim[k].set(&self.encoders[k], &text, frac);
-        }
         let grid = st.grid | (st.histogram as u8) << 4;
         let geotag = st.geotag && !st.asleep;
         drop(st);
@@ -1862,6 +1883,7 @@ impl App {
     fn capture(self: &Rc<Self>) {
         self.hold_sleep();
         self.feedback("camera-shutter");
+        self.flash_shutter();
         if self.st.borrow().sparkle {
             led::sparkle(accent());
         }
@@ -2654,32 +2676,43 @@ impl App {
             // the strip's position comes before its touch-down in each report
             input::Ev::StripX(_) | input::Ev::StripTouch(_) if !self.st.borrow().strip_zoom => {}
             input::Ev::StripX(x) => {
-                let (down, last) = {
+                let (down, last, active, lock, x0) = {
                     let st = self.st.borrow();
-                    (st.strip_down, st.strip_x)
+                    (st.strip_down, st.strip_x, st.strip_active, st.strip_lock, st.strip_x0)
                 };
-                let function = self.strip_function();
                 if !down {
-                    {
-                        let mut st = self.st.borrow_mut();
-                        st.strip_down = true;
-                        st.strip_t0 = Instant::now();
-                        st.strip_x0 = x;
-                        st.strip_x = x;
-                    }
-                    if function != 0 {
-                        self.wheel_grab([Dial::Iso, Dial::Shutter, Dial::Ev][function - 1]);
+                    // a touch begins: the function it will have is fixed now, and nothing moves
+                    // until the finger has gone a clear way (a tap or a double tap never nudges a value)
+                    let function = self.strip_function();
+                    let mut st = self.st.borrow_mut();
+                    st.strip_down = true;
+                    st.strip_active = false;
+                    st.strip_lock = function;
+                    st.strip_t0 = Instant::now();
+                    st.strip_x0 = x;
+                    st.strip_x = x;
+                } else if !active {
+                    if ((x - x0).abs() as f64) >= STRIP_LEN / 20.0 {
+                        // the slide begins here
+                        {
+                            let mut st = self.st.borrow_mut();
+                            st.strip_active = true;
+                            st.strip_x = x;
+                        }
+                        if lock != 0 {
+                            self.wheel_grab([Dial::Iso, Dial::Shutter, Dial::Ev][lock - 1]);
+                        }
                     }
                 } else {
                     self.st.borrow_mut().strip_x = x;
-                    if function == 0 {
+                    if lock == 0 {
                         // OpenLight: a full strip length zooms 2.3x
                         let raw = self.st.borrow().zoom_raw;
                         self.zoom_gesture(raw * 2.3f64.powf((x - last) as f64 / STRIP_LEN));
                     } else {
                         // a full strip length is most of the value's range; to the right for more
                         // (a greater position is a lower value)
-                        let dial = [Dial::Iso, Dial::Shutter, Dial::Ev][function - 1];
+                        let dial = [Dial::Iso, Dial::Shutter, Dial::Ev][lock - 1];
                         let (pos, inverse) = {
                             let st = self.st.borrow();
                             (
@@ -2697,28 +2730,38 @@ impl App {
             }
             input::Ev::StripTouch(true) => {}
             input::Ev::StripTouch(false) => {
-                let function = self.strip_function();
-                let (tap, x0) = {
+                let (active, lock, x0, quick) = {
                     let mut st = self.st.borrow_mut();
                     st.strip_down = false;
-                    let tap = st.strip_t0.elapsed() < Duration::from_millis(300)
-                        && (st.strip_x - st.strip_x0).abs() < 30;
-                    (tap, st.strip_x0)
+                    let active = std::mem::replace(&mut st.strip_active, false);
+                    if active {
+                        st.strip_slid_at = Some(Instant::now());
+                        st.strip_tap_at = None;
+                    }
+                    (active, st.strip_lock, st.strip_x0, st.strip_t0.elapsed() < Duration::from_millis(300))
                 };
-                if function != 0 {
-                    self.wheel_release();
+                if active {
+                    // a slide ended: not a tap, and no tap right after it counts either
+                    if lock != 0 {
+                        self.wheel_release();
+                    }
+                    return;
+                }
+                if !quick {
+                    return;
                 }
                 // taps on the ends step between the primes (as the zoom)
-                if tap && x0 < 100 && function == 0 {
+                if x0 < 100 && lock == 0 {
                     self.step_prime(false);
-                } else if tap && x0 > 700 && function == 0 {
+                } else if x0 > 700 && lock == 0 {
                     self.step_prime(true);
-                } else if tap && (100..=700).contains(&x0) {
-                    // a double tap in the middle: the strip's next function
+                } else if (100..=700).contains(&x0) {
+                    // a double tap in the middle: the strip's next function (not just after a slide)
                     let double = {
                         let mut st = self.st.borrow_mut();
-                        let double = st.strip_tap_at.is_some_and(|t| t.elapsed() < Duration::from_millis(420));
-                        st.strip_tap_at = if double { None } else { Some(Instant::now()) };
+                        let after_slide = st.strip_slid_at.is_some_and(|t| t.elapsed() < Duration::from_millis(250));
+                        let double = !after_slide && st.strip_tap_at.is_some_and(|t| t.elapsed() < Duration::from_millis(420));
+                        st.strip_tap_at = if double || after_slide { None } else { Some(Instant::now()) };
                         double
                     };
                     if double {
@@ -2984,7 +3027,7 @@ impl App {
                 self.wheels.set(pos);
                 self.flyout_unit.set(dial_name(dial));
                 self.flyout_suffix.set("");
-                self.flyout_anim.set(&self.flyout, &value, 1.0 - pos);
+                self.set_flyout_text(&value, [4, 6, 4][dial_index(dial)]);
                 shown = Some(dial_index(dial) as u8);
             } else if st.zoom_wheel_until.is_some_and(|t| Instant::now() < t) {
                 let pos = (st.zoom / ZOOM_MIN).ln();
@@ -2992,7 +3035,7 @@ impl App {
                 self.wheels.set(pos);
                 self.flyout_unit.set("FOCAL LENGTH");
                 self.flyout_suffix.set("mm");
-                self.flyout_anim.set(&self.flyout, &format!("{:.0}", st.zoom), pos);
+                self.set_flyout_text(&format!("{:.0}", st.zoom), 3);
                 shown = Some(3);
             }
         }
@@ -3342,14 +3385,14 @@ impl App {
     }
 
     // an encoder: a ring of dots for where the value is in its range, the name inside it, the
-    // value in dot matrix under it. Orange when the mode has it in hand, white and dim when it
-    // is the camera's own (metered) value
+    // value in dot matrix under it (left-justified in its cells). Accent when the mode has it in
+    // hand; white, dim and tagged AUTO when it is the camera's own (metered) value
     fn draw_encoder(&self, cr: &cairo::Context, w: f64, h: f64, dial: Dial) {
         let st = self.st.borrow();
-        let (name, text, frac, active) = encoder_shows(&st, dial);
+        let (name, value, frac, active) = encoder_shows(&st, dial);
         let on = if active { (accent().0, accent().1, accent().2, 1.0) } else { (0.95, 0.95, 0.93, 0.62) };
         let (cx, cy, r) = (w / 2.0, h * 0.36, w.min(h) * 0.27);
-        let n = 28;
+        let n = 36;
         let lit = (frac.clamp(0.0, 1.0) * n as f64).round() as usize;
         for k in 0..n {
             let a = (135.0 + k as f64 * 270.0 / (n - 1) as f64).to_radians();
@@ -3359,38 +3402,43 @@ impl App {
             } else {
                 cr.set_source_rgba(1.0, 1.0, 1.0, 0.13);
             }
-            cr.arc(x, y, 2.5, 0.0, 2.0 * PI);
+            cr.arc(x, y, 1.7, 0.0, 2.0 * PI);
             let _ = cr.fill();
         }
         cr.select_font_face("Adwaita Mono", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
         cr.set_source_rgba(on.0, on.1, on.2, if active { 1.0 } else { 0.7 });
-        text_at(cr, name, cx, cy, if name.len() > 4 { 12.5 } else { 15.0 });
-        let anim = &self.enc_anim[dial_index(dial)];
-        let shown = if anim.text().is_empty() { text } else { anim.text() };
-        let pitch = dots::fit(&shown, w - 24.0, 3.6);
-        anim.draw(cr, cx, cy + r + 12.0, pitch, on);
+        text_at(cr, name, cx, cy, if name.len() > 4 { 11.0 } else { 14.0 });
+        if !active {
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.45);
+            text(cr, "AUTO", w - 10.0, 14.0, 9.0, 1.0);
+        }
+        dots::draw_cells(cr, &value, [4, 6, 4][dial_index(dial)], 14.0, cy + r + 14.0, 3.0, on);
     }
 
-    // the flyout: what is being set, large, in dot matrix
-    fn draw_flyout(&self, cr: &cairo::Context, w: f64, h: f64) {
+    // the flyout: what is being set, large, in dot matrix, left-justified in its cells
+    fn draw_flyout(&self, cr: &cairo::Context, _w: f64, h: f64) {
         cr.select_font_face("Adwaita Mono", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
         cr.set_source_rgba(1.0, 1.0, 1.0, 0.5);
-        text(cr, self.flyout_unit.get(), 18.0, 20.0, 14.0, 0.0);
-        let value = self.flyout_anim.text();
-        // a suffix (mm) sits beside the number, which then moves left to keep the pair centred
-        let suffix = self.flyout_suffix.get();
-        cr.set_font_size(22.0);
-        let sw = if suffix.is_empty() { 0.0 } else { cr.text_extents(suffix).map_or(0.0, |e| e.x_advance()) + 12.0 };
-        let pitch = dots::fit(&value, w - 44.0 - sw, 5.4);
-        let n = value.chars().count() as f64;
-        let dw = (6.0 * n - 1.0).max(0.0) * pitch;
+        text(cr, self.flyout_unit.get(), 20.0, 20.0, 14.0, 0.0);
+        let cells = self.flyout_cells.get();
+        let pitch = 5.0;
         let top = 28.0 + (h - 28.0 - 7.0 * pitch) / 2.0 - 2.0;
-        let cx = w / 2.0 - sw / 2.0;
-        self.flyout_anim.draw(cr, cx, top, pitch, (accent().0, accent().1, accent().2, 1.0));
+        let on = (accent().0, accent().1, accent().2, 1.0);
+        dots::draw_cells(cr, &self.flyout_text.borrow(), cells, 20.0, top, pitch, on);
+        // a suffix (mm) sits after the cells
+        let suffix = self.flyout_suffix.get();
         if !suffix.is_empty() {
             cr.set_source_rgba(1.0, 1.0, 1.0, 0.7);
-            cr.move_to(cx + dw / 2.0 + 12.0, top + 7.0 * pitch - 1.0);
-            let _ = cr.show_text(suffix);
+            text(cr, suffix, 20.0 + dots::cells_width(cells, pitch) + 12.0, top + 7.0 * pitch - 6.0, 18.0, 0.0);
+        }
+    }
+
+    // the flyout's value, in @cells cells; it shows at once
+    fn set_flyout_text(&self, value: &str, cells: usize) {
+        if *self.flyout_text.borrow() != value || self.flyout_cells.get() != cells {
+            self.flyout_text.replace(value.to_string());
+            self.flyout_cells.set(cells);
+            self.flyout.queue_draw();
         }
     }
 
@@ -3411,18 +3459,50 @@ impl App {
         self.flyout_at.set(at);
     }
 
+    // the shutter: a ring of dots round a light disc; when a photo is taken a light runs round the ring
+    // (in the accent colour); the whole dims while photos save
     fn draw_shutter(&self, cr: &cairo::Context, w: f64, h: f64) {
         let busy = self.st.borrow().busy;
-        let (cx, cy, r) = (w / 2.0, h / 2.0, w.min(h) / 2.0 - 2.0);
-        cr.set_source_rgb(1.0, 1.0, 1.0);
-        cr.set_line_width(3.0);
-        cr.arc(cx, cy, r, 0.0, 2.0 * PI);
-        let _ = cr.stroke();
-        if busy {
-            cr.set_source_rgba(1.0, 1.0, 1.0, 0.3);
+        let (cx, cy, r) = (w / 2.0, h / 2.0, w.min(h) / 2.0 - 4.0);
+        let t = self.shutter_flash.get().map_or(1.0, |t0| (t0.elapsed().as_secs_f64() / 0.55).min(1.0));
+        let n = 40;
+        let (ar, ag, ab) = accent();
+        for k in 0..n {
+            let a = (k as f64 / n as f64 * 2.0 - 0.5) * PI;
+            let (x, y) = (cx + r * a.cos(), cy + r * a.sin());
+            // the light: the dots up to t round the ring, then everything eases back
+            let f = k as f64 / n as f64;
+            let lit = if t < 1.0 { (1.0 - ((t - f).abs() * 6.0).min(1.0)).max(if f < t { (1.0 - t) * 1.6 } else { 0.0 }) } else { 0.0 };
+            let base = if busy { 0.28 } else { 0.7 };
+            cr.set_source_rgba(
+                base + (ar - base) * lit,
+                base + (ag - base) * lit,
+                base + (ab - base) * lit,
+                if busy { 0.5 } else { 0.9 },
+            );
+            cr.arc(x, y, 2.0, 0.0, 2.0 * PI);
+            let _ = cr.fill();
         }
-        cr.arc(cx, cy, r - 7.0, 0.0, 2.0 * PI);
+        cr.set_source_rgba(0.95, 0.95, 0.93, if busy { 0.3 } else { 1.0 });
+        cr.arc(cx, cy, r - 12.0, 0.0, 2.0 * PI);
         let _ = cr.fill();
+    }
+
+    // the light round the shutter's ring, for half a second
+    fn flash_shutter(self: &Rc<Self>) {
+        self.shutter_flash.set(Some(Instant::now()));
+        let a = self.clone();
+        self.shutter.add_tick_callback(move |w, _| {
+            if let Some(c) = w.downcast_ref::<Canvas>() {
+                c.queue_draw();
+            }
+            if a.shutter_flash.get().is_some_and(|t| t.elapsed().as_secs_f64() < 0.56) {
+                glib::ControlFlow::Continue
+            } else {
+                a.shutter_flash.set(None);
+                glib::ControlFlow::Break
+            }
+        });
     }
 }
 
@@ -4184,6 +4264,9 @@ fn build(gapp: &gtk::Application) {
             live_iso: 0,
             live_secs: 0.0,
             strip_down: false,
+            strip_active: false,
+            strip_lock: 0,
+            strip_slid_at: None,
             strip_x0: 0,
             strip_x: 0,
             strip_t0: Instant::now(),
@@ -4232,10 +4315,11 @@ fn build(gapp: &gtk::Application) {
         wheels,
         encoders,
         enc_shown: Cell::new([0; 3]),
-        enc_anim: (0..3).map(|_| NumAnim::new()).collect(),
         flyout: flyout.clone(),
         flyout_turn: flyout_turn.clone(),
-        flyout_anim: NumAnim::new(),
+        flyout_text: RefCell::new(String::new()),
+        flyout_cells: Cell::new(4),
+        shutter_flash: Cell::new(None),
         flyout_unit: Cell::new(""),
         flyout_suffix: Cell::new(""),
         flyout_at: Cell::new(255),
