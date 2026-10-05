@@ -76,3 +76,15 @@ pub fn label(icon: char) -> gtk::Label {
     l.set_markup(&markup(icon, ""));
     l
 }
+
+// a key's content: the icon over a short caption (the TE keys' legend)
+pub fn set_key(b: &gtk::Button, icon: char, caption: &str) {
+    let caption = gtk::glib::markup_escape_text(caption);
+    b.set_label(&format!(
+        "<span font_family=\"{FAMILY}\" size=\"175%\">{icon}</span>\n<span size=\"72%\" weight=\"bold\">{caption}</span>"
+    ));
+    if let Some(l) = b.child().and_downcast::<gtk::Label>() {
+        l.set_use_markup(true);
+        l.set_justify(gtk::Justification::Center);
+    }
+}

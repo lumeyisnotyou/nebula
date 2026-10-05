@@ -10,6 +10,7 @@
 mod canvas;
 mod ccb;
 mod dev;
+mod dots;
 mod geo;
 mod gyro;
 mod haptics;
@@ -62,8 +63,6 @@ const ZOOM_MAX: f64 = 150.0;
 // the preview modules' focal lengths: A1, and B4 from 70 mm on (stock never previews on
 // the 150 mm modules; it crops B4)
 const MODULE_MM: [f64; 2] = [28.0, 70.0];
-// the mode wheel's touch band: its labels (two either side of the chosen one)
-const MODE_TOUCH_H: i32 = 320;
 // orange: what the photographer has set; green: in focus, fine; red: clipping, warnings
 const ACCENT: (f64, f64, f64) = (1.0, 0.353, 0.122); // #FF5A1F, Teenage Engineering's orange
 const STRIP_LEN: f64 = 768.0;
@@ -71,27 +70,29 @@ const HIST_BINS: usize = 64;
 
 const CSS: &str = "
 window.camera { background: #000; color: #f2f2ee; font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; }
-.mono, .hud-value, .set-value, .countdown, .burst-count { font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; }
-.hud-cell { padding: 6px 0; }
-.hud-unit { color: rgba(242,242,238,0.45); font-size: 10px; font-weight: 700; letter-spacing: 2px; }
-.hud-value { color: #f2f2ee; font-size: 19px; font-weight: 700; transition: color 150ms ease; }
-.hud-value.fixed { color: #FF5A1F; }
-.hud-value.dim { color: rgba(242,242,238,0.35); }
-.toolbar { background: rgba(14,14,16,0.82); border-radius: 12px; margin: 0 14px 12px 14px;
-    border: 1px solid rgba(255,255,255,0.10); padding: 2px 6px; }
-.toolbar button, button.flat-white { background: none; border: none; box-shadow: none; outline: none;
-    color: #f2f2ee; font-size: 15px; font-weight: 600; min-width: 64px; min-height: 52px;
-    padding: 0; border-radius: 8px; transition: background 140ms ease, color 140ms ease; }
-.toolbar button:active, button.flat-white:active { background: rgba(255,255,255,0.10); }
-.toolbar button.on { color: #FF5A1F; }
-.options { background: rgba(14,14,16,0.88); margin-bottom: 8px; }
-.mode-chip { font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 13px; font-weight: 700;
-    letter-spacing: 2px; color: #0b0b0c; background: #FF5A1F; border-radius: 6px; padding: 3px 12px; }
-.zoom-pill { background: rgba(14,14,16,0.78); border: 1px solid rgba(255,255,255,0.10);
-    border-radius: 10px; padding: 3px; }
-.zoom-chip { background: none; border: none; box-shadow: none; outline: none; padding: 0;
+.mono, .set-value, .countdown, .burst-count { font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; }
+.encoder { background: #121214; border: 1px solid rgba(255,255,255,0.09); border-radius: 10px;
+    transition: border-color 160ms ease; }
+button.flat-white { background: none; border: none; box-shadow: none; outline: none; color: #f2f2ee;
+    font-size: 15px; font-weight: 600; min-width: 44px; min-height: 40px; padding: 0; border-radius: 8px;
+    transition: background 140ms ease, color 140ms ease; }
+button.flat-white:active { background: rgba(255,255,255,0.10); }
+.key { background: #151517; border: 1px solid rgba(255,255,255,0.09); box-shadow: none; outline: none;
+    color: rgba(242,242,238,0.78); padding: 0; border-radius: 8px; min-width: 52px; min-height: 52px;
+    font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
+    transition: background 120ms ease, color 120ms ease, box-shadow 160ms ease; }
+.key:active { background: #232327; }
+.key.on { color: #FF5A1F; box-shadow: inset 0 3px 0 #FF5A1F; }
+.seg { background: #151517; border: 1px solid rgba(255,255,255,0.09); box-shadow: none; outline: none; padding: 0;
+    border-radius: 6px; min-height: 38px; min-width: 0;
+    color: rgba(242,242,238,0.7); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
+    font-size: 11px; font-weight: 700; letter-spacing: 1px;
+    transition: background 140ms ease, color 140ms ease; }
+.seg.on { background: #FF5A1F; border-color: #FF5A1F; color: #0b0b0c; }
+.zoom-pill { background: #121214; border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; padding: 3px; }
+.zoom-chip { background: none; border: none; box-shadow: none; outline: none; padding: 0; border-radius: 6px;
     color: rgba(242,242,238,0.75); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
-    font-size: 13px; font-weight: 700; min-width: 46px; min-height: 36px; border-radius: 7px;
+    font-size: 12px; font-weight: 700; min-width: 58px; min-height: 34px;
     transition: background 140ms ease, color 140ms ease; }
 .zoom-chip.active { background: #FF5A1F; color: #0b0b0c; }
 .status { color: #f2f2ee; font-size: 15px; font-weight: 600; background: rgba(14,14,16,0.82);
@@ -134,8 +135,6 @@ window.rot-cw .spin { transform: rotate(90deg); }
 window.rot-ccw .spin { transform: rotate(-90deg); }
 .fade { transition: opacity 180ms ease; }
 .fade.off { opacity: 0; }
-.mode-wheel { transition: opacity 200ms ease, transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
-.mode-wheel.off { opacity: 0; transform: translateX(28px); }
 ";
 
 #[derive(Clone, Copy, PartialEq)]
@@ -154,24 +153,9 @@ impl Mode {
         MODES.iter().position(|&m| m == self).unwrap_or(0)
     }
 
-    // the mode wheel's label
-    fn label(self) -> &'static str {
-        ["auto", "iso priority", "shutter priority", "manual"][self.index()]
-    }
-
     // the toolbar opener's (and the settings file's)
     fn short(self) -> &'static str {
         ["auto", "iso", "shutter", "manual"][self.index()]
-    }
-
-    // the dials above and below the shutter (stock's getTopControlWheel / getBottomControlWheel)
-    fn dials(self) -> (Option<Dial>, Dial) {
-        match self {
-            Mode::Auto => (None, Dial::Ev),
-            Mode::Iso => (Some(Dial::Iso), Dial::Ev),
-            Mode::Shutter => (Some(Dial::Ev), Dial::Shutter),
-            Mode::Manual => (Some(Dial::Iso), Dial::Shutter),
-        }
     }
 
     fn fixes_iso(self) -> bool {
@@ -199,9 +183,6 @@ enum Dial {
 
 struct State {
     mode: Mode,
-    mode_pos: f64, // the mode wheel's position, 0 (auto) to 1 (manual)
-    mode_start: f64,
-    mode_swiped: bool,
     iso: f64,     // position, see iso_at
     shutter: f64, // position, see secs_at
     ev: f64,      // position, see ev_at
@@ -385,11 +366,6 @@ const SETTINGS: &[SettingRow] = &[
         kind: SettingKind::Switch(|s| s.stacked, |s, v| s.stacked = v),
     },
     SettingRow {
-        title: "Exposure info",
-        sub: "EV, ISO, shutter and focal length beside the preview",
-        kind: SettingKind::Switch(|s| s.exposure_info, |s, v| s.exposure_info = v),
-    },
-    SettingRow {
         title: "Exposure steps",
         sub: "ISO and shutter in stock's 1/3 stops, or anywhere in between",
         kind: SettingKind::Choice(
@@ -409,7 +385,7 @@ const SETTINGS: &[SettingRow] = &[
     },
     SettingRow {
         title: "Inverse wheel scroll",
-        sub: "Turn the exposure wheels the other way",
+        sub: "Turn the exposure controls the other way",
         kind: SettingKind::Switch(|s| s.inverse_wheel, |s, v| s.inverse_wheel = v),
     },
     SettingRow {
@@ -474,32 +450,6 @@ impl Tool {
         }
     }
 
-    fn title(self) -> &'static str {
-        match self {
-            Tool::Flash => "Flash",
-            Tool::Wb => "White balance",
-            Tool::Timer => "Timer",
-            Tool::Grid => "Grid",
-            Tool::Histogram => "Histogram",
-            Tool::Burst => "Burst",
-            Tool::Assist => "Focus peaking and zebras",
-            Tool::Afd => "Continuous focus (AF-D)",
-        }
-    }
-
-    fn icon(self) -> char {
-        match self {
-            Tool::Flash => icons::FLASH,
-            Tool::Wb => icons::WB[0],
-            Tool::Timer => icons::TIMER,
-            Tool::Grid => icons::GRID,
-            Tool::Histogram => icons::HISTOGRAM,
-            Tool::Burst => icons::BURST,
-            Tool::Assist => icons::ASSIST,
-            Tool::Afd => icons::FOCUS_AUTO,
-        }
-    }
-
     // its choices, when it has more than two
     fn opt(self) -> Option<Opt> {
         match self {
@@ -555,9 +505,8 @@ struct App {
     // the overheating warning at its bottom edge
     status_turn: Rotator,
     thermal_turn: Rotator,
-    // the lens pill (the primes as buttons, the zoom on the nearest) at the preview's bottom edge
+    // the lens strip (the primes as keys, the zoom on the nearest) under the preview
     zoom_chips: Vec<gtk::Button>,
-    zoom_turn: Rotator,
     // in front: the screen kept on (an idle inhibitor's cookie) and the display held in
     // landscape (the rotation lock and transform it had, given back after)
     idle_cookie: Cell<u32>,
@@ -583,9 +532,9 @@ struct App {
     hist_area: Canvas,
     wheels: Ruler,
     wheels_turn: Rotator,
-    hud: Vec<gtk::Label>,
-    top: Canvas,
-    bottom: Canvas,
+    // the three encoders (ISO, shutter, EV) and what each was last drawn for (refresh)
+    encoders: Vec<Canvas>,
+    enc_shown: Cell<[u64; 3]>,
     shutter: Canvas,
     thumb: gtk::Image,
     thumb_spin: gtk::DrawingArea,
@@ -606,20 +555,13 @@ struct App {
     // the focus point in the focus layer
     focus_centre: Cell<(f64, f64)>,
     marks_grid: Cell<u8>,
-    // what the dials and the shutter button were last drawn for (refresh)
-    dials_shown: Cell<Option<(Mode, Option<Dial>, bool)>>,
+    // whether the shutter button was drawn busy (refresh)
+    dials_shown: Cell<Option<bool>>,
     moon_badge: gtk::Label,
     shake_badge: gtk::Label,
-    mode_label: gtk::Label,
-    toolbar: gtk::Revealer,
-    // a multi-option setting's choices, in a row above the toolbar
-    options: gtk::Revealer,
-    options_row: gtk::Box,
-    options_for: Cell<Option<Opt>>,
     preview_gain: Cell<f32>,
-    right: gtk::Box,
-    mode_wheel: gtk::DrawingArea,
-    mode_touch: gtk::Box,
+    // the mode keys, in MODES' order
+    mode_btns: Vec<gtk::Button>,
     timer_btn: gtk::Button,
     grid_btn: gtk::Button,
     hist_btn: gtk::Button,
@@ -629,21 +571,17 @@ struct App {
     wb_btn: gtk::Button,
     afd_btn: gtk::Button,
     assist_btn: gtk::Button,
-    tools_box: gtk::Box,
-    // the settings screen, the list a value is chosen from over it, and the toolbar editor
+    // the settings screen, and the list a value is chosen from over it
     settings_list: gtk::ListBox,
     setting_taps: RefCell<Vec<Rc<dyn Fn()>>>,
     chooser: gtk::Box,
     chooser_title: gtk::Label,
     chooser_list: gtk::ListBox,
     chooser_pick: RefCell<Option<Rc<dyn Fn(usize)>>>,
-    editor: gtk::Box,
-    editor_list: gtk::ListBox,
     cal: wb::Calibration,
     motor: haptics::Haptics,
     // a photo's view preferences for the LRI (white balance, exposure), by its directory
     photo_args: RefCell<HashMap<PathBuf, Vec<String>>>,
-    hud_box: gtk::Box,
     settings_page: gtk::Overlay,
     last_saved: RefCell<String>,
     // logind's sleep inhibitor while photos are on their way (dropped: released)
@@ -799,6 +737,42 @@ fn text_q(cr: &cairo::Context, s: &str, x: f64, y: f64, size: f64, align: f64, q
     cr.restore().ok();
 }
 
+// what an encoder shows: its name, the value, where that sits in its range (0 low, 1 high: a
+// greater position is a lower value), and whether the mode has it in hand
+fn encoder_shows(st: &State, dial: Dial) -> (&'static str, String, f64, bool) {
+    match dial {
+        Dial::Iso => {
+            let active = st.mode.fixes_iso();
+            let (v, pos) = if active { (iso_at(st.iso), st.iso) } else { (st.live_iso, iso_pos(st.live_iso.max(1) as f64)) };
+            ("ISO", if v > 0 { v.to_string() } else { "-".into() }, 1.0 - pos, active)
+        }
+        Dial::Shutter => {
+            let active = st.mode.fixes_shutter();
+            let secs = if active { secs_at(st.shutter) } else { st.live_secs };
+            let pos = if active { st.shutter } else { secs_pos(secs.max(SECS_MIN)) };
+            ("SHUTTER", if secs > 0.0 { fmt_secs(secs) } else { "-".into() }, 1.0 - pos, active)
+        }
+        Dial::Ev => {
+            let active = st.mode != Mode::Manual;
+            ("EV", if active { fmt_ev(ev_at(st.ev)) } else { "-".into() }, 1.0 - st.ev, active)
+        }
+    }
+}
+
+// a change-detection key for an encoder's drawing
+fn encoder_key(st: &State, dial: Dial) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let (name, text, frac, active) = encoder_shows(st, dial);
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (name, text, (frac * 1000.0) as i64, active).hash(&mut h);
+    h.finish()
+}
+
+// @s centred on (x, y) in the current font and source
+fn text_at(cr: &cairo::Context, s: &str, x: f64, y: f64, size: f64) {
+    text(cr, s, x, y, size, 0.5);
+}
+
 fn set_class(w: &impl IsA<gtk::Widget>, class: &str, on: bool) {
     if on {
         w.add_css_class(class);
@@ -907,9 +881,7 @@ impl App {
 
     fn refresh(&self) {
         let st = self.st.borrow();
-        let ev = if st.mode == Mode::Manual { "–".to_string() } else { fmt_ev(ev_at(st.ev)) };
         let iso = if st.mode.fixes_iso() { iso_at(st.iso) } else { st.live_iso };
-        let secs = if st.mode.fixes_shutter() { secs_at(st.shutter) } else { st.live_secs };
         // stock keeps the sensors' analog gain at most 7.75 (ISO 775) and has its ISP apply
         // the ASICs' digital boost on top, before its gamma: the software ISP does the same
         // here (libcamera's DigitalGain, our patch). With the ISO set (ISO priority, manual)
@@ -939,49 +911,35 @@ impl App {
                 chip.remove_css_class("active");
             }
         }
-        self.hud[0].set_text(&ev);
-        for (l, fixed, dim) in [
-            (&self.hud[0], st.mode != Mode::Manual && st.ev != 0.5 && ev_at(st.ev) != 0, st.mode == Mode::Manual),
-            (&self.hud[1], st.mode.fixes_iso(), iso <= 0),
-            (&self.hud[2], st.mode.fixes_shutter(), secs <= 0.0),
-        ] {
-            if fixed { l.add_css_class("fixed") } else { l.remove_css_class("fixed") }
-            if dim { l.add_css_class("dim") } else { l.remove_css_class("dim") }
-        }
-        self.hud[1].set_text(&if iso > 0 { iso.to_string() } else { "–".into() });
-        self.hud[2].set_text(&if secs > 0.0 { fmt_secs(secs) } else { "–".into() });
-        self.hud[3].set_text(&format!("{:.0}", st.zoom));
         self.focal.store((st.zoom * 10.0) as u32, Ordering::Relaxed);
-        self.mode_label.set_text(&st.mode.short().to_uppercase());
         let t = TIMERS[st.timer];
-        icons::set(&self.timer_btn, if t == 0 { icons::TIMER_OFF } else { icons::TIMER }, &if t == 0 { String::new() } else { format!("{t}s") });
+        icons::set_key(&self.timer_btn, if t == 0 { icons::TIMER_OFF } else { icons::TIMER }, &if t == 0 { "OFF".to_string() } else { format!("{t}S") });
         if t == 0 {
             self.timer_btn.remove_css_class("on");
         } else {
             self.timer_btn.add_css_class("on");
         }
-        icons::set(&self.grid_btn, if st.grid == 0 { icons::GRID_OFF } else { icons::GRID }, ["", "", "φ"][st.grid as usize]);
-        icons::set(&self.hist_btn, icons::HISTOGRAM, "");
+        icons::set_key(&self.grid_btn, if st.grid == 0 { icons::GRID_OFF } else { icons::GRID }, ["OFF", "3X3", "PHI"][st.grid as usize]);
+        icons::set_key(&self.hist_btn, icons::HISTOGRAM, if st.histogram { "ON" } else { "OFF" });
         if st.histogram {
             self.hist_btn.add_css_class("on");
         } else {
             self.hist_btn.remove_css_class("on");
         }
-        icons::set(&self.flash_btn, [icons::FLASH_OFF, icons::FLASH_AUTO, icons::FLASH][st.flash as usize], "");
-        icons::set(&self.wb_btn, icons::WB[st.wb], "");
+        icons::set_key(&self.flash_btn, [icons::FLASH_OFF, icons::FLASH_AUTO, icons::FLASH][st.flash as usize], ["OFF", "AUTO", "ON"][st.flash as usize]);
+        icons::set_key(&self.wb_btn, icons::WB[st.wb], ["AUTO", "TUNG", "FLUO", "DAY", "CLDY"][st.wb.min(4)]);
         if st.wb > 0 {
             self.wb_btn.add_css_class("on");
         } else {
             self.wb_btn.remove_css_class("on");
         }
-        self.hud_box.set_opacity(if st.exposure_info { 1.0 } else { 0.0 });
         if st.flash > 0 {
             self.flash_btn.add_css_class("on");
         } else {
             self.flash_btn.remove_css_class("on");
         }
         let b = BURSTS[st.burst];
-        icons::set(&self.burst_btn, icons::BURST, &if b > 1 { b.to_string() } else { String::new() });
+        icons::set_key(&self.burst_btn, icons::BURST, &if b > 1 { format!("{b}X") } else { "OFF".to_string() });
         self.burst_badge.set_text(&format!("×{b}"));
         self.burst_badge.set_visible(b > 1);
         if b > 1 {
@@ -994,20 +952,25 @@ impl App {
         } else {
             self.grid_btn.remove_css_class("on");
         }
-        icons::set(&self.assist_btn, if st.assist == 0 { icons::ASSIST_OFF } else { icons::ASSIST }, ["", "PK", "ZB", "PK+ZB"][st.assist as usize]);
+        icons::set_key(&self.assist_btn, if st.assist == 0 { icons::ASSIST_OFF } else { icons::ASSIST }, ["OFF", "PEAK", "ZEBRA", "BOTH"][st.assist as usize]);
         if st.assist > 0 {
             self.assist_btn.add_css_class("on");
         } else {
             self.assist_btn.remove_css_class("on");
         }
         self.view.set_assist(st.assist);
+        icons::set_key(&self.afd_btn, icons::FOCUS_AUTO, if st.caf { "ON" } else { "OFF" });
+        for (i, b) in self.mode_btns.iter().enumerate() {
+            set_class(b, "on", i == st.mode.index());
+        }
         if st.caf {
             self.afd_btn.add_css_class("on");
         } else {
             self.afd_btn.remove_css_class("on");
         }
         let saved = st.saved();
-        let dials = (st.mode, st.wheel, st.busy);
+        let busy = st.busy;
+        let enc = [Dial::Iso, Dial::Shutter, Dial::Ev].map(|d| encoder_key(&st, d));
         let grid = st.grid | (st.histogram as u8) << 4;
         let geotag = st.geotag && !st.asleep;
         drop(st);
@@ -1028,10 +991,15 @@ impl App {
         }
         // the dials and the shutter button, when what they show changes (a redraw is a whole
         // Cairo surface made again and uploaded)
-        if self.dials_shown.replace(Some(dials)) != Some(dials) {
-            self.top.queue_draw();
-            self.bottom.queue_draw();
+        if self.dials_shown.replace(Some(busy)) != Some(busy) {
             self.shutter.queue_draw();
+        }
+        // an encoder, when what it shows has changed
+        let before = self.enc_shown.replace(enc);
+        for (k, c) in self.encoders.iter().enumerate() {
+            if before[k] != enc[k] {
+                c.queue_draw();
+            }
         }
         // the grid and the histogram: only when switched (the histogram's updates redraw it)
         if self.marks_grid.replace(grid) != grid {
@@ -1169,26 +1137,14 @@ impl App {
         }
     }
 
-    // the toolbar: the chosen buttons, in their order
-    fn layout_toolbar(&self) {
-        while let Some(c) = self.tools_box.first_child() {
-            self.tools_box.remove(&c);
-        }
-        let tools = self.st.borrow().tools.clone();
-        for t in tools {
-            self.tools_box.append(self.tool_button(t));
-        }
-    }
-
+    // a key: the next of its choices, or a switch flipped
     fn tool_tap(self: &Rc<Self>, t: Tool) {
         match t.opt() {
-            Some(o) if self.st.borrow().tool_cycle => {
+            Some(o) => {
                 let (choices, now) = self.choices(o);
                 self.choose(o, (now + 1) % choices.len());
             }
-            Some(o) => self.show_options(Some(o)),
             None => {
-                self.show_options(None);
                 {
                     let mut st = self.st.borrow_mut();
                     match t {
@@ -1199,6 +1155,7 @@ impl App {
                 self.refresh();
             }
         }
+        self.buzz(8);
     }
 
     // after a setting changes: the driver's side of it, the screen, the settings file
@@ -1256,12 +1213,6 @@ impl App {
         }));
     }
 
-    fn link_row(&self, title: &str, sub: &str, tap: Rc<dyn Fn()>) {
-        let chevron = icons::label(icons::CHEVRON_RIGHT);
-        chevron.add_css_class("set-chevron");
-        self.setting_row(title, sub, &[chevron.upcast()], tap);
-    }
-
     fn open_chooser(&self, title: &str, options: &[String], now: usize, pick: Rc<dyn Fn(usize)>) {
         self.chooser_title.set_text(title);
         while let Some(c) = self.chooser_list.first_child() {
@@ -1290,43 +1241,6 @@ impl App {
             self.settings_list.remove(&c);
         }
         self.setting_taps.borrow_mut().clear();
-        let hidden: Vec<Tool> = TOOLS
-            .into_iter()
-            // (AF-D has its row among the rest)
-            .filter(|t| *t != Tool::Afd && !self.st.borrow().tools.contains(t))
-            .collect();
-        for t in hidden {
-            match t.opt() {
-                Some(o) => {
-                    let (choices, now) = self.choices(o);
-                    let names = choices.into_iter().map(|(_, n)| n).collect();
-                    let a = self.clone();
-                    self.choice_row(t.title(), "", names, now, Rc::new(move |k| a.choose(o, k)));
-                }
-                None if t == Tool::Histogram => {
-                    self.switch_row(t.title(), "", |s| s.histogram, |s, v| s.histogram = v)
-                }
-                None => self.switch_row(t.title(), "", |s| s.caf, |s, v| s.caf = v),
-            }
-        }
-        let a = self.clone();
-        self.link_row(
-            "Toolbar",
-            "Which buttons the toolbar has, and their order",
-            Rc::new(move || {
-                a.fill_editor();
-                a.editor.set_visible(true);
-            }),
-        );
-        let a = self.clone();
-        let cycle = self.st.borrow().tool_cycle as usize;
-        self.choice_row(
-            "Toolbar buttons",
-            "A button with several settings shows them in a row above the toolbar, or steps to the next",
-            vec!["Show choices".into(), "Cycle".into()],
-            cycle,
-            Rc::new(move |k| a.st.borrow_mut().tool_cycle = k == 1),
-        );
         for row in SETTINGS {
             match row.kind {
                 SettingKind::Switch(get, set) => self.switch_row(row.title, row.sub, get, set),
@@ -1337,92 +1251,6 @@ impl App {
                     self.choice_row(row.title, row.sub, names, now, Rc::new(move |k| set(&mut a.st.borrow_mut(), k)));
                 }
             }
-        }
-    }
-
-    // the toolbar editor: the toolbar's buttons in order (up and down move them), then the
-    // others; the switch puts one on the toolbar or takes it off
-    fn fill_editor(self: &Rc<Self>) {
-        while let Some(c) = self.editor_list.first_child() {
-            self.editor_list.remove(&c);
-        }
-        let shown = self.st.borrow().tools.clone();
-        let rest = TOOLS.into_iter().filter(|t| !shown.contains(t));
-        for t in shown.iter().copied().chain(rest) {
-            let on = shown.contains(&t);
-            let line = gtk::Box::new(gtk::Orientation::Horizontal, 16);
-            let icon = icons::label(t.icon());
-            icon.add_css_class("set-title");
-            let title = gtk::Label::new(Some(t.title()));
-            title.add_css_class("set-title");
-            title.set_halign(gtk::Align::Start);
-            title.set_hexpand(true);
-            line.append(&icon);
-            line.append(&title);
-            for (glyph, by) in [(icons::CHEVRON_UP, -1i32), (icons::CHEVRON_DOWN, 1)] {
-                let b = icons::button(glyph, "");
-                b.add_css_class("flat-white");
-                let i = shown.iter().position(|s| *s == t);
-                let can = i.is_some_and(|i| (0..shown.len() as i32).contains(&(i as i32 + by)));
-                b.set_opacity(if can { 1.0 } else { 0.0 });
-                b.set_sensitive(can);
-                let a = self.clone();
-                b.connect_clicked(move |_| {
-                    if let Some(i) = i {
-                        a.st.borrow_mut().tools.swap(i, (i as i32 + by) as usize);
-                        a.editor_changed();
-                    }
-                });
-                line.append(&b);
-            }
-            let sw = gtk::Switch::new();
-            sw.set_active(on);
-            sw.set_valign(gtk::Align::Center);
-            let a = self.clone();
-            sw.connect_active_notify(move |sw| {
-                {
-                    let mut st = a.st.borrow_mut();
-                    st.tools.retain(|s| *s != t);
-                    if sw.is_active() {
-                        st.tools.push(t);
-                    }
-                }
-                a.editor_changed();
-            });
-            line.append(&sw);
-            self.editor_list.append(&line);
-        }
-    }
-
-    fn editor_changed(self: &Rc<Self>) {
-        self.layout_toolbar();
-        self.refresh();
-        let a = self.clone();
-        glib::idle_add_local_once(move || a.fill_editor());
-    }
-
-    // a toolbar button with choices: their row, or (tapped again) none
-    fn show_options(self: &Rc<Self>, o: Option<Opt>) {
-        let o = if o.is_some() && self.options_for.get() == o { None } else { o };
-        self.options_for.set(o);
-        self.options.set_reveal_child(o.is_some());
-        let Some(o) = o else { return };
-        while let Some(c) = self.options_row.first_child() {
-            self.options_row.remove(&c);
-        }
-        let (choices, now) = self.choices(o);
-        for (k, (icon, name)) in choices.into_iter().enumerate() {
-            let b = icons::button(icon, &name);
-            b.add_css_class("spin");
-            if k == now {
-                b.add_css_class("on");
-            }
-            let a = self.clone();
-            b.connect_clicked(move |_| {
-                a.choose(o, k);
-                a.show_options(None);
-            });
-            self.options_row.append(&b);
         }
     }
 
@@ -1442,53 +1270,6 @@ impl App {
             Opt::Assist => self.st.borrow_mut().assist = k as u8,
         }
         self.refresh();
-    }
-
-    // stock's toolbar: opening it swaps the right-hand column (last photo, dials, shutter)
-    // for the mode wheel (only while no photo is being taken)
-    fn show_toolbar(&self, open: bool) {
-        if open && self.st.borrow().busy {
-            return;
-        }
-        self.toolbar.set_reveal_child(open);
-        if !open {
-            self.options_for.set(None);
-            self.options.set_reveal_child(false);
-        }
-        set_class(&self.right, "off", open);
-        self.right.set_can_target(!open);
-        set_class(&self.mode_wheel, "off", !open);
-        self.mode_touch.set_can_target(open);
-        self.update_pill();
-        let pos = self.st.borrow().mode.index() as f64 / (MODES.len() - 1) as f64;
-        self.st.borrow_mut().mode_pos = pos;
-        self.mode_wheel.queue_draw();
-    }
-
-    // the mode wheel's positions: 0 for auto to 1 for manual, a mode per 1/3
-    // @apply: send the mode to the camera as the wheel passes it, as stock does (the driver
-    // sends only what changed: one or two messages a mode); false only re-snaps the wheel
-    fn set_mode_pos(&self, pos: f64, apply: bool) {
-        let pos = pos.clamp(0.0, 1.0);
-        let max = (MODES.len() - 1) as f64;
-        let mode = MODES[(pos * max).round() as usize];
-        self.st.borrow_mut().mode_pos = pos;
-        // the mode changes as the wheel passes half way to it, as stock's
-        if apply {
-            self.set_mode(mode);
-        } else if mode != self.st.borrow().mode {
-            self.st.borrow_mut().mode = mode;
-            self.refresh();
-        }
-        self.mode_wheel.queue_draw();
-    }
-
-    // stock's ModeWheel (landscape) in this screen's units (its pixels / 1.75): the modes as
-    // text on a drum down the right edge, the chosen one level with a white bar at the edge
-    fn mode_item_y(pos: f64, idx: usize, h: f64, step: f64) -> f64 {
-        let max = (MODES.len() - 1) as f64;
-        let th = step.to_radians() * (idx as f64 - max * pos);
-        h / 2.0 - th.sin() * h * th.cos().powi(5)
     }
 
     // portrait or landscape, from iio-sensor-proxy: the window's class turns the icons in
@@ -1517,7 +1298,6 @@ impl App {
         }
         self.place_status(q);
         self.lens_badge.queue_draw();
-        self.mode_wheel.queue_draw();
     }
 
     // the status line along the preview's top edge as the camera is held: the top, or the
@@ -1526,7 +1306,6 @@ impl App {
     fn place_status(&self, q: i32) {
         place_on_edge(&self.status_turn, q, true, 14);
         place_on_edge(&self.thermal_turn, q, false, 70);
-        place_on_edge(&self.zoom_turn, q, false, 14);
         // the ruler runs the whole right edge as the camera is held: the right, or (turned)
         // the bottom with the shutter down, the top with it up
         let (h, v) = match q {
@@ -1536,77 +1315,6 @@ impl App {
         };
         self.wheels_turn.set_halign(h);
         self.wheels_turn.set_valign(v);
-    }
-
-    // degrees between the mode wheel's labels (stock's 2 and 4 dip, as angles)
-    fn mode_step(&self) -> f64 {
-        if self.quarter.get() == 0 { 6.0 } else { 12.0 }
-    }
-
-    fn draw_mode_wheel(&self, cr: &cairo::Context, w: f64, h: f64) {
-        let pos = self.st.borrow().mode_pos;
-        let (q, step) = (self.quarter.get(), self.mode_step());
-        let label_of = |m: Mode| if q == 0 { m.label() } else { m.short() };
-        let upper = |m: Mode| label_of(m).to_uppercase();
-        // the strip's shade: clear at its left, a quarter black at the edge
-        let g = cairo::LinearGradient::new(0.0, 0.0, w, 0.0);
-        g.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.0);
-        g.add_color_stop_rgba(1.0, 0.0, 0.0, 0.0, 0.25);
-        let _ = cr.set_source(&g);
-        cr.rectangle(0.0, 0.0, w, h);
-        let _ = cr.fill();
-        cr.set_source_rgb(ACCENT.0, ACCENT.1, ACCENT.2);
-        rounded(cr, w - 6.0, h / 2.0 - 24.0, 12.0, 48.0, 3.0);
-        let _ = cr.fill();
-        let max = (MODES.len() - 1) as f64;
-        let base = (max * pos).floor() as i64;
-        cr.select_font_face("Adwaita Mono", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
-        // the labels' size, smaller if the longest wouldn't fit
-        cr.set_font_size(36.0);
-        let widest = MODES
-            .iter()
-            .filter_map(|m| cr.text_extents(&upper(*m)).ok())
-            .map(|e| e.width())
-            .fold(0.0, f64::max);
-        // turned, a label's length runs along the wheel: within the gap to the next one
-        let room = if q == 0 { w - 48.0 - 16.0 } else { 0.85 * step.to_radians().sin() * h };
-        let size = 36.0 * (room / widest).min(1.0);
-        for i in -2i64..=2 {
-            let idx = base + i;
-            if idx < 0 || idx > max as i64 {
-                continue;
-            }
-            let th = step.to_radians() * (idx as f64 - max * pos);
-            let y = Self::mode_item_y(pos, idx as usize, h, step);
-            // stock's perspective: the slot's exponent, and neighbours at 3/4 alpha
-            let k = if i == 0 { 26 } else { 52 / i.abs() as i32 };
-            let alpha = th.cos() * if i == 0 { 1.0 } else { 0.75 };
-            let label = upper(MODES[idx as usize]);
-            let label = label.as_str();
-            cr.set_font_size(size * th.cos().powi(k));
-            let Ok(e) = cr.text_extents(label) else { continue };
-            if q == 0 {
-                cr.move_to(w - e.width() - 48.0 - e.x_bearing(), y - e.height() / 2.0 - e.y_bearing());
-                cr.text_path(label);
-            } else {
-                // turned about its centre, a text height in from the edge mark
-                cr.save().ok();
-                cr.translate(w - 48.0 - e.height() / 2.0, y);
-                cr.rotate(q as f64 * PI / 2.0);
-                cr.move_to(-e.width() / 2.0 - e.x_bearing(), -e.height() / 2.0 - e.y_bearing());
-                cr.text_path(label);
-                cr.restore().ok();
-            }
-            cr.set_source_rgba(0.0, 0.0, 0.0, alpha * 0.5);
-            cr.set_line_width(3.0);
-            let _ = cr.stroke_preserve();
-            if i == 0 {
-                cr.set_source_rgba(ACCENT.0, ACCENT.1, ACCENT.2, alpha);
-            } else {
-                cr.set_source_rgba(1.0, 1.0, 1.0, alpha);
-            }
-            let _ = cr.fill();
-        }
     }
 
     // the driver restarts the ASICs' preview on the new module; the stream carries on
@@ -1842,7 +1550,6 @@ impl App {
 
     fn shutter_pressed(self: &Rc<Self>) {
         self.settings_page.set_visible(false);
-        self.show_toolbar(false);
         let (busy, counting, t) = {
             let st = self.st.borrow();
             (st.busy, st.counting, TIMERS[st.timer])
@@ -2985,17 +2692,18 @@ impl App {
         }
         set_class(&self.wheels_turn, "off", !shown);
         self.wheels_turn.set_can_target(touch);
-        self.update_pill();
-    }
-
-    // the lens pill gives way to the ruler and to the toolbar
-    fn update_pill(&self) {
-        let off = !self.wheels_turn.has_css_class("off") || self.toolbar.reveals_child();
-        set_class(&self.zoom_turn, "off", off);
-        self.zoom_turn.set_can_target(!off);
     }
 
     // a finger on a dial (or on the ruler, still up): the value to follow it from
+    fn dial_active(&self, dial: Dial) -> bool {
+        let mode = self.st.borrow().mode;
+        match dial {
+            Dial::Iso => mode.fixes_iso(),
+            Dial::Shutter => mode.fixes_shutter(),
+            Dial::Ev => mode != Mode::Manual,
+        }
+    }
+
     fn wheel_grab(self: &Rc<Self>, dial: Dial) {
         {
             let mut st = self.st.borrow_mut();
@@ -3046,38 +2754,32 @@ impl App {
         }
     }
 
-    fn draw_dial(&self, cr: &cairo::Context, w: f64, h: f64, top: bool) {
+    // an encoder: a ring of dots for where the value is in its range, the name inside it, the
+    // value in dot matrix under it. Orange when the mode has it in hand, white and dim when it
+    // is the camera's own (metered) value
+    fn draw_encoder(&self, cr: &cairo::Context, w: f64, h: f64, dial: Dial) {
         let st = self.st.borrow();
-        // auto has no top dial
-        let (top_dial, bottom_dial) = st.mode.dials();
-        let Some(d) = (if top { top_dial } else { Some(bottom_dial) }) else { return };
-        let label = match d {
-            Dial::Iso => "ISO",
-            Dial::Shutter => "S",
-            Dial::Ev => "EV",
-        };
-        let (enabled, dial) = (true, Some(d));
-        let (cx, cy, r) = (w / 2.0, h / 2.0, w.min(h) / 2.0 - 2.0);
-        if st.wheel.is_some() && st.wheel != dial {
-            return;
-        }
-        if dial.is_some() && st.wheel == dial {
-            cr.set_source_rgba(ACCENT.0, ACCENT.1, ACCENT.2, 0.18);
-            cr.arc(cx, cy, r, 0.0, 2.0 * PI);
+        let (name, text, frac, active) = encoder_shows(&st, dial);
+        let on = if active { (ACCENT.0, ACCENT.1, ACCENT.2, 1.0) } else { (0.95, 0.95, 0.93, 0.62) };
+        let (cx, cy, r) = (w / 2.0, h * 0.36, w.min(h) * 0.27);
+        let n = 28;
+        let lit = (frac.clamp(0.0, 1.0) * n as f64).round() as usize;
+        for k in 0..n {
+            let a = (135.0 + k as f64 * 270.0 / (n - 1) as f64).to_radians();
+            let (x, y) = (cx + r * a.cos(), cy + r * a.sin());
+            if k < lit {
+                cr.set_source_rgba(on.0, on.1, on.2, on.3);
+            } else {
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.13);
+            }
+            cr.arc(x, y, 2.5, 0.0, 2.0 * PI);
             let _ = cr.fill();
         }
-        let alpha = if enabled { 1.0 } else { 0.35 };
-        let active = dial.is_some() && st.wheel == dial;
-        if active {
-            cr.set_source_rgba(ACCENT.0, ACCENT.1, ACCENT.2, alpha);
-        } else {
-            cr.set_source_rgba(1.0, 1.0, 1.0, alpha * 0.9);
-        }
-        cr.set_line_width(2.0);
-        cr.arc(cx, cy, r, 0.0, 2.0 * PI);
-        let _ = cr.stroke();
         cr.select_font_face("Adwaita Mono", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
-        text(cr, label, cx, cy, 15.0, 0.5);
+        cr.set_source_rgba(on.0, on.1, on.2, if active { 1.0 } else { 0.7 });
+        text_at(cr, name, cx, cy, 12.0);
+        let pitch = dots::fit(&text, w - 24.0, 3.6);
+        dots::draw(cr, &text, cx, cy + r + 12.0, pitch, on);
     }
 
     fn draw_shutter(&self, cr: &cairo::Context, w: f64, h: f64) {
@@ -3255,17 +2957,6 @@ fn rounded(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
     cr.close_path();
 }
 
-fn hud_item(value: &gtk::Label, unit: &str) -> gtk::Box {
-    let b = gtk::Box::new(gtk::Orientation::Vertical, 1);
-    b.add_css_class("hud-cell");
-    value.add_css_class("hud-value");
-    let u = gtk::Label::new(Some(unit));
-    u.add_css_class("hud-unit");
-    b.append(&u);
-    b.append(value);
-    b
-}
-
 fn build(gapp: &gtk::Application) {
     let provider = gtk::CssProvider::new();
     provider.load_from_string(CSS);
@@ -3334,20 +3025,23 @@ fn build(gapp: &gtk::Application) {
     frame.set_child(Some(&preview));
     frame.set_hexpand(true);
 
-    // left: the exposure readout
-    let hud: Vec<gtk::Label> = (0..4).map(|_| gtk::Label::new(Some("–"))).collect();
-    let left = gtk::Box::new(gtk::Orientation::Vertical, 16);
-    left.set_size_request(96, -1);
+    // left: the three encoders, each square so that turning it for portrait keeps the column
+    let encoders: Vec<Canvas> = (0..3)
+        .map(|_| {
+            let c = Canvas::new();
+            c.set_size_request(132, 132);
+            c.add_css_class("encoder");
+            c
+        })
+        .collect();
+    let left = gtk::Box::new(gtk::Orientation::Vertical, 10);
     left.set_valign(gtk::Align::Center);
-    let hud_box = gtk::Box::new(gtk::Orientation::Vertical, 16);
-    for (l, unit) in hud.iter().zip(["EV", "ISO", "SHUTTER", "MM"]) {
-        // centred in the column, as the badges above: turned, filling it put the
-        // readout against the screen's edge
-        let r = turn(hud_item(l, unit).upcast_ref());
-        r.set_halign(gtk::Align::Center);
-        hud_box.append(&r);
+    left.set_margin_start(10);
+    left.set_margin_end(8);
+    left.set_margin_top(36);
+    for c in &encoders {
+        left.append(&turn(c.upcast_ref()));
     }
-    left.append(&hud_box);
 
     // right: last photo, the dials around the shutter, the toolbar opener
     let thumb = gtk::Image::new();
@@ -3393,65 +3087,86 @@ fn build(gapp: &gtk::Application) {
         d.set_halign(gtk::Align::Center);
         d
     };
-    let (top, shutter, bottom) = (dial(72), dial(92), dial(72));
-    for d in [&top, &shutter, &bottom] {
-        d.add_css_class("spin");
-    }
-    let mode_label = gtk::Label::new(Some("AUTO"));
-    mode_label.add_css_class("mode-chip");
-    let opener_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    opener_box.append(&icons::label(icons::CHEVRON_UP));
-    opener_box.append(&turn(mode_label.upcast_ref()));
-    let opener = gtk::Button::new();
-    opener.set_child(Some(&opener_box));
-    opener.add_css_class("flat-white");
-    opener.set_halign(gtk::Align::Center);
-    opener.set_margin_bottom(8);
-    let right = gtk::Box::new(gtk::Orientation::Vertical, 13);
-    right.add_css_class("fade");
-    right.set_size_request(200, -1);
-    let spacer = || {
-        let s = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        s.set_vexpand(true);
-        s
-    };
-    right.append(&thumb_box);
-    right.append(&spacer());
-    right.append(&top);
-    right.append(&shutter);
-    right.append(&bottom);
-    right.append(&spacer());
-    right.append(&opener);
-
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    row.append(&left);
-    row.append(&frame);
-    row.append(&right);
-
-    // the toolbar: flash, timer, grid, burst, and the settings screen (the mode wheel beside it)
+    let shutter = dial(92);
+    shutter.add_css_class("spin");
+    // right: settings and close, the mode keys, the grid of keys, the last photo and the shutter
+    let key_grid = gtk::Grid::new();
+    key_grid.set_row_spacing(6);
+    key_grid.set_column_spacing(6);
+    key_grid.set_row_homogeneous(true);
+    key_grid.set_column_homogeneous(true);
     let timer_btn = icons::button(icons::TIMER_OFF, "");
     let grid_btn = icons::button(icons::GRID_OFF, "");
     let hist_btn = icons::button(icons::HISTOGRAM, "");
     let burst_btn = icons::button(icons::BURST, "");
     let flash_btn = icons::button(icons::FLASH_OFF, "");
     let wb_btn = icons::button(icons::WB[0], "");
-    let settings_btn = icons::button(icons::COG, "");
-    let close_btn = icons::button(icons::CLOSE, "");
     let afd_btn = icons::button(icons::FOCUS_AUTO, "");
     let assist_btn = icons::button(icons::ASSIST_OFF, "");
-    for b in [&timer_btn, &grid_btn, &hist_btn, &burst_btn, &flash_btn, &wb_btn, &settings_btn, &close_btn, &afd_btn, &assist_btn] {
+    for (k, b) in [&flash_btn, &wb_btn, &timer_btn, &grid_btn, &hist_btn, &assist_btn, &burst_btn, &afd_btn].into_iter().enumerate() {
+        b.add_css_class("key");
+        b.add_css_class("spin");
+        key_grid.attach(b, (k % 4) as i32, (k / 4) as i32, 1, 1);
+    }
+    let settings_btn = icons::button(icons::COG, "");
+    let close_btn = icons::button(icons::CLOSE, "");
+    for b in [&settings_btn, &close_btn] {
+        b.add_css_class("flat-white");
         b.add_css_class("spin");
     }
-    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    bar.add_css_class("toolbar");
-    // the chosen buttons (layout_toolbar)
-    let tools_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    bar.append(&tools_box);
-    let fill = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    fill.set_hexpand(true);
-    bar.append(&fill);
-    bar.append(&settings_btn);
-    bar.append(&close_btn);
+    let top_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let top_fill = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    top_fill.set_hexpand(true);
+    top_row.append(&top_fill);
+    top_row.append(&settings_btn);
+    top_row.append(&close_btn);
+    let mode_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    mode_row.set_homogeneous(true);
+    let mode_btns: Vec<gtk::Button> = ["AUTO", "ISO", "TIME", "MAN"]
+        .iter()
+        .map(|name| {
+            let l = gtk::Label::new(Some(name));
+            l.add_css_class("spin");
+            let b = gtk::Button::new();
+            b.set_child(Some(&l));
+            b.add_css_class("seg");
+            mode_row.append(&b);
+            b
+        })
+        .collect();
+    let right = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    right.set_size_request(236, -1);
+    right.set_margin_end(10);
+    right.set_margin_top(6);
+    right.set_margin_bottom(10);
+    let spacer = || {
+        let s = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        s.set_vexpand(true);
+        s
+    };
+    thumb_box.set_margin_top(0);
+    thumb_box.set_valign(gtk::Align::End);
+    let shutter_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    let shutter_fill = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    shutter_fill.set_hexpand(true);
+    shutter_row.append(&thumb_box);
+    shutter_row.append(&shutter_fill);
+    shutter_row.append(&shutter);
+    right.append(&top_row);
+    right.append(&mode_row);
+    right.append(&key_grid);
+    right.append(&spacer());
+    right.append(&shutter_row);
+
+    // the preview with the lens strip under it
+    let centre = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    centre.set_hexpand(true);
+    frame.set_vexpand(true);
+    centre.append(&frame);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    row.append(&left);
+    row.append(&centre);
+    row.append(&right);
 
     // the settings screen (OpenLight's: a list of title, explanation and value)
     let settings_list = gtk::ListBox::new();
@@ -3491,52 +3206,6 @@ fn build(gapp: &gtk::Application) {
     chooser.append(&turn(chooser_card.upcast_ref()));
     chooser.set_visible(false);
     settings_page.add_overlay(&chooser);
-    // the toolbar editor: which buttons, in what order
-    let editor_list = gtk::ListBox::new();
-    editor_list.set_selection_mode(gtk::SelectionMode::None);
-    let editor_scroll = gtk::ScrolledWindow::new();
-    editor_scroll.set_child(Some(&editor_list));
-    editor_scroll.set_vexpand(true);
-    editor_scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
-    let editor_back = icons::button(icons::ARROW_LEFT, "toolbar");
-    editor_back.add_css_class("flat-white");
-    editor_back.set_halign(gtk::Align::Start);
-    editor_back.set_margin_start(16);
-    let editor = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    editor.add_css_class("settings");
-    editor.append(&editor_back);
-    editor.append(&editor_scroll);
-    editor.set_visible(false);
-    settings_page.add_overlay(&turn(editor.upcast_ref()));
-    let options_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    options_row.add_css_class("toolbar");
-    options_row.add_css_class("options");
-    let options = gtk::Revealer::builder()
-        .transition_type(gtk::RevealerTransitionType::SlideUp)
-        .child(&options_row)
-        .build();
-    let toolbar_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    toolbar_box.append(&options);
-    toolbar_box.append(&bar);
-    let toolbar = gtk::Revealer::builder()
-        .transition_type(gtk::RevealerTransitionType::SlideUp)
-        .child(&toolbar_box)
-        .valign(gtk::Align::End)
-        .build();
-    // the mode wheel: drawn down the whole right edge, but touched only around its labels, so
-    // taps elsewhere (the toolbar) pass through
-    let mode_wheel = gtk::DrawingArea::new();
-    mode_wheel.set_halign(gtk::Align::End);
-    mode_wheel.set_size_request(386, -1); // stock's 225 dp
-    mode_wheel.set_can_target(false);
-    mode_wheel.add_css_class("mode-wheel");
-    mode_wheel.add_css_class("off");
-    let mode_touch = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    mode_touch.set_halign(gtk::Align::End);
-    mode_touch.set_valign(gtk::Align::Center);
-    mode_touch.set_size_request(386, MODE_TOUCH_H);
-    mode_touch.set_can_target(false);
-
     // shown only while a wheel is (exposure, or zoom just changed)
     let wheels = Ruler::new();
     wheels.set_halign(gtk::Align::End);
@@ -3562,6 +3231,9 @@ fn build(gapp: &gtk::Application) {
         .map(|p| {
             let b = gtk::Button::with_label(&format!("{p:.0}"));
             b.add_css_class("zoom-chip");
+            if let Some(l) = b.child() {
+                l.add_css_class("spin");
+            }
             b
         })
         .collect();
@@ -3571,10 +3243,8 @@ fn build(gapp: &gtk::Application) {
         zoom_pill.append(c);
     }
     zoom_pill.set_halign(gtk::Align::Center);
-    zoom_pill.set_valign(gtk::Align::End);
-    zoom_pill.set_margin_bottom(14);
-    let zoom_turn = turn(zoom_pill.upcast_ref());
-    zoom_turn.add_css_class("fade");
+    zoom_pill.set_margin_bottom(10);
+    centre.append(&zoom_pill);
     let countdown = gtk::Label::new(None);
     countdown.add_css_class("countdown");
     countdown.add_css_class("spin");
@@ -3703,14 +3373,10 @@ fn build(gapp: &gtk::Application) {
     preview.add_overlay(&lens_badge);
     // on the preview, at its bottom edge as the camera is held (place_status)
     preview.add_overlay(&thermal_turn);
-    preview.add_overlay(&zoom_turn);
     preview.add_overlay(&wheels_turn);
     root.add_overlay(&status_box_turn);
     preview.add_overlay(&status_turn);
     root.add_overlay(&countdown);
-    root.add_overlay(&toolbar);
-    root.add_overlay(&mode_wheel);
-    root.add_overlay(&mode_touch);
     root.add_overlay(&burst_screen);
     root.add_overlay(&battery_screen);
     root.add_overlay(&hot_screen);
@@ -3754,9 +3420,6 @@ fn build(gapp: &gtk::Application) {
     let app = Rc::new(App {
         st: RefCell::new(State {
             mode: Mode::Auto,
-            mode_pos: 0.0,
-            mode_start: 0.0,
-            mode_swiped: false,
             iso: 1.0,
             ev: 0.5,
             shutter: secs_pos(1.0 / 60.0),
@@ -3845,7 +3508,6 @@ fn build(gapp: &gtk::Application) {
         status_turn: status_turn.clone(),
         thermal_turn: thermal_turn.clone(),
         zoom_chips: zoom_chips.clone(),
-        zoom_turn: zoom_turn.clone(),
         idle_cookie: Cell::new(0),
         landscape_held: RefCell::new(None),
         rotators,
@@ -3867,9 +3529,8 @@ fn build(gapp: &gtk::Application) {
         focus_area,
         wheels,
         wheels_turn,
-        hud,
-        top,
-        bottom,
+        encoders,
+        enc_shown: Cell::new([0; 3]),
         shutter,
         thumb,
         thumb_spin,
@@ -3887,15 +3548,8 @@ fn build(gapp: &gtk::Application) {
         dials_shown: Cell::new(None),
         moon_badge,
         shake_badge,
-        mode_label,
-        toolbar,
-        options,
-        options_row,
-        options_for: Cell::new(None),
         preview_gain: Cell::new(1.0),
-        right,
-        mode_wheel,
-        mode_touch,
+        mode_btns,
         timer_btn,
         grid_btn,
         hist_btn,
@@ -3905,19 +3559,15 @@ fn build(gapp: &gtk::Application) {
         wb_btn,
         afd_btn,
         assist_btn,
-        tools_box,
         settings_list,
         setting_taps: RefCell::new(Vec::new()),
         chooser: chooser.clone(),
         chooser_title,
         chooser_list: chooser_list.clone(),
         chooser_pick: RefCell::new(None),
-        editor,
-        editor_list,
         cal: wb::Calibration::load(),
         motor: haptics::Haptics::open(),
         photo_args: RefCell::new(HashMap::new()),
-        hud_box,
         settings_page,
         last_saved: RefCell::new(String::new()),
         sleep_inhibitor: RefCell::new(None),
@@ -3961,11 +3611,11 @@ fn build(gapp: &gtk::Application) {
     let a = app.clone();
     app.lens_badge.set_draw_func(move |_, cr, w, h| a.draw_lens_blocked(cr, w as f64, h as f64));
     let a = app.clone();
-    app.top.set_draw_func(move |_, cr, w, h| a.draw_dial(cr, w as f64, h as f64, true));
-    let a = app.clone();
-    app.bottom.set_draw_func(move |_, cr, w, h| a.draw_dial(cr, w as f64, h as f64, false));
-    let a = app.clone();
     app.shutter.set_draw_func(move |_, cr, w, h| a.draw_shutter(cr, w as f64, h as f64));
+    for (c, dial) in app.encoders.iter().zip([Dial::Iso, Dial::Shutter, Dial::Ev]) {
+        let a = app.clone();
+        c.set_draw_func(move |_, cr, w, h| a.draw_encoder(cr, w as f64, h as f64, dial));
+    }
     let a = app.clone();
     app.thumb_spin.set_draw_func(move |_, cr, w, h| a.draw_thumb_spin(cr, w as f64, h as f64));
     app.burst_dots.set_draw_func(|_, cr, w, h| {
@@ -3987,11 +3637,7 @@ fn build(gapp: &gtk::Application) {
         if a.st.borrow().dragged {
             return;
         }
-        if a.toolbar.reveals_child() {
-            a.show_toolbar(false);
-        } else {
-            a.focus(Some((x, y)));
-        }
+        a.focus(Some((x, y)));
     });
     app.view.add_controller(click);
     let drag = gtk::GestureDrag::new();
@@ -4024,20 +3670,22 @@ fn build(gapp: &gtk::Application) {
     });
     app.view.add_controller(pinch);
 
-    // the dials: tap and drag (which dial is which depends on the mode): up for more, down for less
-    for (widget, top) in [(app.top.clone(), true), (app.bottom.clone(), false)] {
+    // the encoders: a touch grabs the value (when the mode has it in hand), a drag up raises it
+    // and down lowers it; the ruler shows along the preview's edge. The encoders sit in
+    // Rotators, so the drag is in the camera's own up and down in portrait too
+    for (c, dial) in app.encoders.iter().zip([Dial::Iso, Dial::Shutter, Dial::Ev]) {
         let drag = gtk::GestureDrag::new();
         let a = app.clone();
         drag.connect_drag_begin(move |_, _, _| {
-            let (top_dial, bottom_dial) = a.st.borrow().mode.dials();
-            let Some(dial) = (if top { top_dial } else { Some(bottom_dial) }) else { return };
-            a.wheel_grab(dial);
+            if a.dial_active(dial) {
+                a.wheel_grab(dial);
+            }
         });
         let a = app.clone();
         drag.connect_drag_update(move |_, _, dy| a.wheel_drag(dy));
         let a = app.clone();
         drag.connect_drag_end(move |_, _, _| a.wheel_release());
-        widget.add_controller(drag);
+        c.add_controller(drag);
     }
     // and the ruler itself, while it shows (a touch on it is in its own, turned, coordinates)
     let bar_drag = gtk::GestureDrag::new();
@@ -4058,71 +3706,24 @@ fn build(gapp: &gtk::Application) {
     click.connect_released(move |_, _, _, _| a.shutter_pressed());
     app.shutter.add_controller(click);
 
-    // toolbar
-    let a = app.clone();
-    opener.connect_clicked(move |_| {
-        let open = a.toolbar.reveals_child();
-        a.show_toolbar(!open);
-    });
-    let a = app.clone();
-    close_btn.connect_clicked(move |_| a.show_toolbar(false));
-    // the mode wheel: drag it up and down (a mode per ~70 px, as stock's 0.002 of its pixels), or
-    // tap a mode; it settles on the mode when let go
-    let a = app.clone();
-    app.mode_wheel.set_draw_func(move |_, cr, w, h| a.draw_mode_wheel(cr, w as f64, h as f64));
-    let drag = gtk::GestureDrag::new();
-    let a = app.clone();
-    drag.connect_drag_begin(move |_, _, _| {
-        let mut st = a.st.borrow_mut();
-        st.mode_start = st.mode.index() as f64 / (MODES.len() - 1) as f64;
-        st.mode_swiped = false;
-    });
-    let a = app.clone();
-    drag.connect_drag_update(move |_, _, dy| {
-        if dy.abs() > 8.0 {
-            a.st.borrow_mut().mode_swiped = true;
-        }
-        let start = a.st.borrow().mode_start;
-        a.set_mode_pos(start + dy * 0.0035, true);
-    });
-    let a = app.clone();
-    drag.connect_drag_end(move |_, _, _| {
-        // settle on the chosen mode (already applied as the wheel passed it)
-        let pos = a.st.borrow().mode.index() as f64 / (MODES.len() - 1) as f64;
-        a.set_mode_pos(pos, false);
-    });
-    app.mode_touch.add_controller(drag);
-    let click = gtk::GestureClick::new();
-    let a = app.clone();
-    click.connect_released(move |_, _, _, y| {
-        // the end of a swipe is not a tap on the label under the finger
-        if a.st.borrow().mode_swiped {
-            return;
-        }
-        let (pos, h) = (a.st.borrow().mode_pos, a.mode_wheel.height() as f64);
-        // the touch band sits centred on the wheel
-        let y = y + (h - MODE_TOUCH_H as f64) / 2.0;
-        let near = (0..MODES.len())
-            .map(|i| (i, (App::mode_item_y(pos, i, h, a.mode_step()) - y).abs()))
-            .min_by(|p, q| p.1.total_cmp(&q.1));
-        if let Some((i, d)) = near {
-            if d < 30.0 {
-                a.set_mode_pos(i as f64 / (MODES.len() - 1) as f64, true);
-            }
-        }
-    });
-    app.mode_touch.add_controller(click);
-    // the toolbar's buttons
+    // the mode keys, and the close key (the app closes as the window does)
+    for (b, mode) in app.mode_btns.iter().zip(MODES) {
+        let a = app.clone();
+        b.connect_clicked(move |_| {
+            a.buzz(8);
+            a.set_mode(mode);
+        });
+    }
+    let w = window.clone();
+    close_btn.connect_clicked(move |_| w.close());
+    // the keys
     for t in TOOLS {
         let a = app.clone();
         app.tool_button(t).connect_clicked(move |_| a.tool_tap(t));
     }
-    app.layout_toolbar();
     let a = app.clone();
     settings_btn.connect_clicked(move |_| {
-        a.show_toolbar(false);
         a.chooser.set_visible(false);
-        a.editor.set_visible(false);
         a.fill_settings();
         a.settings_page.set_visible(true);
         a.follow_screen();
@@ -4131,11 +3732,6 @@ fn build(gapp: &gtk::Application) {
         let a = app.clone();
         chip.connect_clicked(move |_| a.zoom_to(prime));
     }
-    let a = app.clone();
-    editor_back.connect_clicked(move |_| {
-        a.editor.set_visible(false);
-        a.fill_settings();
-    });
     let a = app.clone();
     settings_back.connect_clicked(move |_| {
         a.settings_page.set_visible(false);
@@ -4148,7 +3744,7 @@ fn build(gapp: &gtk::Application) {
             a.follow_screen();
         }
     });
-    // the settings screen's rows, the chooser's and the editor's taps
+    // the settings screen's rows and the chooser's taps
     let a = app.clone();
     app.settings_list.connect_row_activated(move |_, r| {
         let tap = a.setting_taps.borrow().get(r.index() as usize).cloned();
@@ -4330,7 +3926,6 @@ fn build(gapp: &gtk::Application) {
         glib::timeout_add_local_once(Duration::from_millis(600), move || {
             for v in view.split(',') {
                 match v {
-                    "toolbar" => a.show_toolbar(true),
                     "manual" => a.set_mode(Mode::Manual),
                     "iso-priority" => a.set_mode(Mode::Iso),
                     "histogram" => {
@@ -4362,7 +3957,6 @@ fn build(gapp: &gtk::Application) {
                         a.update_wheels();
                     }
                     "settings" => {
-                        a.show_toolbar(false);
                         a.fill_settings();
                         a.settings_page.set_visible(true);
                     }
