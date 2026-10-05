@@ -1,35 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-  <defs>
-    <clipPath id="glass"><rect x="12.00" y="23.81" width="104.00" height="76.37" rx="4"/></clipPath>
-    <linearGradient id="gloss" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#fff" stop-opacity="0.35"/>
-      <stop offset="0.5" stop-color="#fff" stop-opacity="0.06"/>
-      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
-    </linearGradient>
-  </defs>
-  <rect x="8.00" y="24.81" width="112" height="84.37" rx="8" fill="#5e5c64"/>
-  <rect x="8.00" y="19.81" width="112" height="84.37" rx="8" fill="#9a9996"/>
-  <rect x="12.00" y="23.81" width="104.00" height="76.37" rx="4" fill="#241f31"/>
-  <circle cx="71.40" cy="41.73" r="9.90" fill="#3d3846"/>
-  <circle cx="71.40" cy="41.73" r="7.13" fill="#1c3a5e"/>
-  <circle cx="68.93" cy="39.25" r="1.78" fill="#fff" opacity="0.6"/>
-  <circle cx="101.57" cy="41.73" r="9.90" fill="#3d3846"/>
-  <circle cx="101.57" cy="41.73" r="7.13" fill="#1c3a5e"/>
-  <circle cx="99.10" cy="39.25" r="1.78" fill="#fff" opacity="0.6"/>
-  <circle cx="56.32" cy="62.00" r="9.90" fill="#3d3846"/>
-  <circle cx="56.32" cy="62.00" r="7.13" fill="#1c3a5e"/>
-  <circle cx="53.84" cy="59.52" r="1.78" fill="#fff" opacity="0.6"/>
-  <circle cx="86.49" cy="62.00" r="9.90" fill="#3d3846"/>
-  <circle cx="86.49" cy="62.00" r="7.13" fill="#1c3a5e"/>
-  <circle cx="84.01" cy="59.52" r="1.78" fill="#fff" opacity="0.6"/>
-  <circle cx="71.40" cy="82.27" r="9.90" fill="#3d3846"/>
-  <circle cx="71.40" cy="82.27" r="7.13" fill="#1c3a5e"/>
-  <circle cx="68.93" cy="79.80" r="1.78" fill="#fff" opacity="0.6"/>
-  <circle cx="101.57" cy="82.27" r="9.90" fill="#3d3846"/>
-  <circle cx="101.57" cy="82.27" r="7.13" fill="#1c3a5e"/>
-  <circle cx="99.10" cy="79.80" r="1.78" fill="#fff" opacity="0.6"/>
-  <g clip-path="url(#glass)">
-    <rect x="12.00" y="23.81" width="104.00" height="76.37" fill="url(#gloss)"/>
-    <polygon points="41.12,23.81 64.00,23.81 34.88,100.19 12.00,100.19" fill="#fff" opacity="0.12"/>
-  </g>
+<svg width="217" height="217" viewBox="0 0 217 217" fill="none" xmlns="http://www.w3.org/2000/svg">
+<rect width="217" height="217" fill="#1E1E1E"/>
+<g id="NebulaIcon">
+<g id="Rectangle 1">
+<path d="M177.672 44C180.867 44 183.93 45.2741 186.183 47.54L205.511 66.9854C207.745 69.2337 209 72.2753 209 75.4453V162C209 168.627 203.627 174 197 174H21C14.3726 174 9 168.627 9 162V56C9 49.3726 14.3726 44 21 44H177.672Z" fill="#D9D9D9"/>
+<path d="M177.672 44C180.867 44 183.93 45.2741 186.183 47.54L205.511 66.9854C207.745 69.2337 209 72.2753 209 75.4453V162C209 168.627 203.627 174 197 174H21C14.3726 174 9 168.627 9 162V56C9 49.3726 14.3726 44 21 44H177.672Z" fill="black" fill-opacity="0.2"/>
+<path d="M177.672 44C180.867 44 183.93 45.2741 186.183 47.54L205.511 66.9854C207.745 69.2337 209 72.2753 209 75.4453V162C209 168.627 203.627 174 197 174H21C14.3726 174 9 168.627 9 162V56C9 49.3726 14.3726 44 21 44H177.672Z"/>
+<path d="M177.672 44C180.867 44 183.93 45.2741 186.183 47.54L205.511 66.9854C207.745 69.2337 209 72.2753 209 75.4453V162C209 168.627 203.627 174 197 174H21C14.3726 174 9 168.627 9 162V56C9 49.3726 14.3726 44 21 44H177.672Z" stroke="url(#paint0_linear_0_1)" stroke-width="8"/>
+</g>
+</g>
+<defs>
+<linearGradient id="paint0_linear_0_1" x1="109" y1="48" x2="109" y2="170" gradientUnits="userSpaceOnUse">
+<stop stop-color="#6C458E"/>
+<stop offset="1" stop-color="#0F1943"/>
+</linearGradient>
+</defs>
 </svg>
