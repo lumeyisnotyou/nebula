@@ -24,3 +24,7 @@ D-Bus activation: `org.l16linux.Nebula`.
 
 Settings live in `~/.config/nebula/settings`; the log is `~/.cache/nebula.log`. Manual focus needs
 a lens-position control in the light-ccb driver, which does not exist yet.
+
+## License
+
+MIT, as the l16-linux packages it comes from: see [LICENSE](LICENSE).
