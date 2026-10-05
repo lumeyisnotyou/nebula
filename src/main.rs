@@ -21,6 +21,7 @@ mod prox;
 mod rotate;
 mod ruler;
 mod settings;
+mod settings_ui;
 mod transfer;
 mod wb;
 mod zoomview;
@@ -78,6 +79,12 @@ const ACCENTS: &[(&str, &str, (f64, f64, f64))] = &[
     ("White", "#F2F2EE", (0.949, 0.949, 0.933)),
 ];
 static ACCENT_IDX: AtomicUsize = AtomicUsize::new(0);
+// high contrast is on (bright light, or asked for): the drawing code brightens its dim parts
+static CONTRAST: AtomicBool = AtomicBool::new(false);
+
+fn contrast() -> bool {
+    CONTRAST.load(Ordering::Relaxed)
+}
 
 // the accent now (a setting; blue by default)
 fn accent() -> (f64, f64, f64) {
@@ -163,23 +170,8 @@ button.flat-white:active { background: rgba(255,255,255,0.10); }
 .burst-badge { color: @accent; font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 12px;
     font-weight: 700; border: 1px solid alpha(@accent, 0.6); border-radius: 8px; padding: 0 6px; }
 .settings { background: #000; }
-.settings list { background: #000; }
-.settings row, .chooser row { padding: 16px 32px; border-bottom: 1px solid rgba(255,255,255,0.08);
-    background: none; }
-.settings row:active, .chooser row:active { background: rgba(255,255,255,0.08); }
 .set-title { font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; color: #f2f2ee; font-size: 17px; font-weight: 600; }
 .set-sub { font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; color: rgba(242,242,238,0.50); font-size: 13px; }
-.set-value { color: @accent; font-size: 15px; font-weight: 700; }
-.set-chevron { color: rgba(242,242,238,0.45); font-size: 20px; }
-.settings switch { background: rgba(255,255,255,0.18); border: none; }
-.settings switch:checked { background: @accent; }
-.settings switch slider { background: #f2f2ee; border: none; box-shadow: none; }
-.chooser { background: rgba(0,0,0,0.65); }
-.chooser-card { background: #16161a; border-radius: 12px; border: 1px solid rgba(255,255,255,0.10); }
-.chooser-card list { background: none; }
-.chooser-title { color: rgba(242,242,238,0.5); font-size: 12px; font-weight: 700; letter-spacing: 2px;
-    padding: 18px 32px 8px 32px; }
-.chooser-check { color: @accent; font-size: 18px; font-weight: 700; }
 .spin { transition: transform 50ms ease-in; }
 window.rot-cw .spin { transform: rotate(90deg); }
 window.rot-ccw .spin { transform: rotate(-90deg); }
@@ -198,12 +190,49 @@ window.rot-ccw .spin { transform: rotate(-90deg); }
 .enc-wrap.gone { opacity: 0; transform: translateY(32px); }
 .key.stowed { opacity: 0; transform: translateX(44px); }
 .key.pinned { border-color: alpha(@accent, 0.55); }
-.system { background: #141416; border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; padding: 4px; }
-.sys { transition: opacity 220ms ease, transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
-.sys.sys-hidden { opacity: 0; transform: translateX(-40px); }
 .pill { background: #141416; border: 1px solid alpha(@accent, 0.55); border-radius: 999px; padding: 6px 18px;
     color: #f2f2ee; font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 16px; font-weight: 600; }
 .alert-icon { color: @accent; }
+.scrim { background: rgba(0,0,0,0.6); }
+.sidebar { background: #101012; border-right: 1px solid rgba(255,255,255,0.12); padding: 22px 18px;
+    transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.sidebar.side-hidden { transform: translateX(-340px); }
+.side-title { color: rgba(242,242,238,0.5); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 13px;
+    font-weight: 700; letter-spacing: 3px; margin-bottom: 8px; }
+.side-row { background: none; border: none; box-shadow: none; outline: none; color: #f2f2ee; border-radius: 10px;
+    min-height: 56px; padding: 0 12px; font-size: 19px; font-weight: 600; }
+.side-row:active { background: rgba(255,255,255,0.10); }
+.side-head { color: rgba(242,242,238,0.45); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 12px;
+    font-weight: 700; letter-spacing: 2px; margin-top: 18px; margin-bottom: 4px; padding-left: 12px; }
+.side-quick { padding-left: 12px; }
+.side-about { color: rgba(242,242,238,0.42); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 12px; padding-left: 12px; }
+.settings { background: #000; }
+.nav { background: #0b0b0c; }
+.nav row { padding: 20px 26px; background: none; color: rgba(242,242,238,0.7); font-size: 19px; font-weight: 600;
+    border-bottom: 1px solid rgba(255,255,255,0.06); }
+.nav row:selected { background: alpha(@accent, 0.14); color: @accent; }
+.pane { padding: 18px 34px 34px 34px; }
+.pane-title { color: rgba(242,242,238,0.45); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 12px;
+    font-weight: 700; letter-spacing: 3px; margin-bottom: 8px; }
+.pane-row { padding: 16px 0; border-bottom: 1px solid rgba(255,255,255,0.08); }
+.choices { margin-top: 2px; }
+.about-line { color: rgba(242,242,238,0.6); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 15px; margin-top: 6px; }
+.check-label { color: #f2f2ee; font-size: 17px; font-weight: 600; }
+checkbutton { padding: 6px 0; }
+checkbutton check { margin-right: 12px; min-width: 24px; min-height: 24px; border-radius: 7px; background: #17171a;
+    border: 1px solid rgba(255,255,255,0.28); -gtk-icon-source: none; }
+checkbutton check:checked { background: @accent; border-color: @accent; }
+checkbutton radio { margin-right: 12px; min-width: 24px; min-height: 24px; border-radius: 999px; background: #17171a;
+    border: 1px solid rgba(255,255,255,0.28); -gtk-icon-source: none; }
+checkbutton radio:checked { background: @accent; border-color: @accent; }
+window.contrast .encoder, window.contrast .key, window.contrast .zoom-pill { background: #26262b; border-color: rgba(255,255,255,0.4); }
+window.contrast .key { color: #ffffff; }
+window.contrast .key.on { background: alpha(@accent, 0.28); border-color: @accent; }
+window.contrast .zoom-chip { color: #ffffff; }
+window.contrast .pill, window.contrast .bubble { background: #26262b; border-width: 2px; }
+window.contrast .bubble-text { color: #ffffff; }
+window.contrast .sidebar, window.contrast .nav { background: #1c1c20; }
+window.contrast .set-sub, window.contrast .side-about, window.contrast .about-line { color: rgba(255,255,255,0.85); }
 ";
 
 #[derive(Clone, Copy, PartialEq)]
@@ -262,6 +291,7 @@ struct State {
     histogram: bool,
     assist: u8, // focus peaking (1) and zebras (2), as bits
     accent: usize, // ACCENTS' index
+    contrast: usize, // high contrast: 0 auto (in bright light), 1 on, 2 off
     sparkle: bool, // a burst of light from the LED by the shutter button when a photo is taken
     pinned: u16, // the keys that stay when the controls are swiped away (a bit each, grid order)
     strip_fn: usize, // what the touch strip does: 0 zoom, 1 ISO, 2 shutter, 3 EV
@@ -348,7 +378,7 @@ impl State {
         let mode = self.mode.short();
         format!(
             "mode={mode}\niso={}\nshutter={}\nev={}\nflash={}\ntimer={}\ngrid={}\nhistogram={}\nassist={}\nburst={}\n\
-             wb={}\nmetering={}\ncaf={}\nstacked={}\nexposure_info={}\ninverse_wheel={}\nhaptics={}\ncontinuous={}\nstrip_zoom={}\ntoolbar={}\ntool_cycle={}\nlens_warn={}\ndevice_status={}\npocket={}\ngeotag={}\naccent={}\npinned={}\nstrip_set={}\nsparkle={}\n",
+             wb={}\nmetering={}\ncaf={}\nstacked={}\nexposure_info={}\ninverse_wheel={}\nhaptics={}\ncontinuous={}\nstrip_zoom={}\ntoolbar={}\ntool_cycle={}\nlens_warn={}\ndevice_status={}\npocket={}\ngeotag={}\naccent={}\ncontrast={}\npinned={}\nstrip_set={}\nsparkle={}\n",
             self.iso,
             self.shutter,
             self.ev,
@@ -374,6 +404,7 @@ impl State {
             self.pocket as u8,
             self.geotag as u8,
             self.accent,
+            self.contrast,
             self.pinned,
             self.strip_set,
             self.sparkle as u8,
@@ -414,143 +445,12 @@ impl State {
         self.pocket = flag("pocket", self.pocket);
         self.geotag = flag("geotag", self.geotag);
         self.sparkle = flag("sparkle", self.sparkle);
+        self.contrast = num("contrast").map_or(self.contrast, |v| (v as usize).min(2));
         self.pinned = num("pinned").map_or(self.pinned, |v| v as u16 & 0x0fff);
         self.strip_set = num("strip_set").map_or(self.strip_set, |v| (v as u8) & 0b1111);
         self.accent = num("accent").map_or(self.accent, |v| (v as usize).min(ACCENTS.len() - 1));
     }
 }
-
-// a row of the settings screen: a switch, or a value that opens a list to choose from
-enum SettingKind {
-    Switch(fn(&State) -> bool, fn(&mut State, bool)),
-    Choice(&'static [&'static str], fn(&State) -> usize, fn(&mut State, usize)),
-}
-
-struct SettingRow {
-    title: &'static str,
-    sub: &'static str,
-    kind: SettingKind,
-}
-
-const SETTINGS: &[SettingRow] = &[
-    SettingRow {
-        title: "Metering",
-        sub: "Where auto exposure meters: the centre, the spot you tap, or the whole frame",
-        kind: SettingKind::Choice(
-            &["Centre-weighted", "Touch", "Whole frame"],
-            |s| s.metering as usize,
-            |s, v| s.metering = v as u8,
-        ),
-    },
-    SettingRow {
-        title: "Continuous focus",
-        sub: "Refocus when the scene changes (AF-D), outside manual mode",
-        kind: SettingKind::Switch(|s| s.caf, |s, v| s.caf = v),
-    },
-    SettingRow {
-        title: "Stacked capture",
-        sub: "In low light, several exposures per module for less noise",
-        kind: SettingKind::Switch(|s| s.stacked, |s, v| s.stacked = v),
-    },
-    SettingRow {
-        title: "Exposure steps",
-        sub: "ISO and shutter in stock's 1/3 stops, or anywhere in between",
-        kind: SettingKind::Choice(
-            &["1/3 stop", "Continuous"],
-            |s| s.continuous as usize,
-            |s, v| s.continuous = v == 1,
-        ),
-    },
-    SettingRow {
-        title: "Strip: zoom",
-        sub: "Zoom is one of the things a double tap on the touch strip switches it to",
-        kind: SettingKind::Switch(
-            |s| s.strip_set >> 0 & 1 == 1,
-            |s, v| if v { s.strip_set |= 1 << 0 } else { s.strip_set &= !(1 << 0) },
-        ),
-    },
-    SettingRow {
-        title: "Strip: ISO",
-        sub: "ISO is one of them (when the mode lets you set it)",
-        kind: SettingKind::Switch(
-            |s| s.strip_set >> 1 & 1 == 1,
-            |s, v| if v { s.strip_set |= 1 << 1 } else { s.strip_set &= !(1 << 1) },
-        ),
-    },
-    SettingRow {
-        title: "Strip: shutter",
-        sub: "Shutter is one of them (when the mode lets you set it)",
-        kind: SettingKind::Switch(
-            |s| s.strip_set >> 2 & 1 == 1,
-            |s, v| if v { s.strip_set |= 1 << 2 } else { s.strip_set &= !(1 << 2) },
-        ),
-    },
-    SettingRow {
-        title: "Strip: exposure",
-        sub: "EV is one of them (when the mode lets you set it)",
-        kind: SettingKind::Switch(
-            |s| s.strip_set >> 3 & 1 == 1,
-            |s, v| if v { s.strip_set |= 1 << 3 } else { s.strip_set &= !(1 << 3) },
-        ),
-    },
-    SettingRow {
-        title: "Shutter sparkle",
-        sub: "A burst of light from the LED by the shutter button when a photo is taken",
-        kind: SettingKind::Switch(|s| s.sparkle, |s, v| s.sparkle = v),
-    },
-    SettingRow {
-        title: "Accent colour",
-        sub: "The colour of what you have set: values, selected keys, the dials",
-        kind: SettingKind::Choice(
-            &["Blue", "Orange", "Green", "Pink", "Amber", "White"],
-            |s| s.accent,
-            |s, v| s.accent = v,
-        ),
-    },
-    SettingRow {
-        title: "Haptics",
-        sub: "Vibration as the dials and the zoom turn",
-        kind: SettingKind::Choice(
-            &["Off", "Normal", "Strong"],
-            |s| s.haptics as usize,
-            |s, v| s.haptics = v as u8,
-        ),
-    },
-    SettingRow {
-        title: "Inverse wheel scroll",
-        sub: "Turn the exposure controls the other way",
-        kind: SettingKind::Switch(|s| s.inverse_wheel, |s, v| s.inverse_wheel = v),
-    },
-    SettingRow {
-        title: "Device status",
-        sub: "Battery and captures left in the corner of the viewfinder",
-        kind: SettingKind::Switch(|s| s.device_status, |s, v| s.device_status = v),
-    },
-    SettingRow {
-        title: "Geotagging",
-        sub: "Record where photos are taken (the camera's GPS, through location services)",
-        kind: SettingKind::Switch(|s| s.geotag, |s, v| s.geotag = v),
-    },
-    SettingRow {
-        title: "Pocket detection",
-        sub: "Close the camera after 30 s in a pocket (the lenses covered, in the dark)",
-        kind: SettingKind::Switch(|s| s.pocket, |s, v| s.pocket = v),
-    },
-    SettingRow {
-        title: "Lens blocked warning",
-        sub: "Warn when a finger covers the camera modules (the sensors around them)",
-        kind: SettingKind::Choice(
-            &["Off", "On", "On, with buzz"],
-            |s| s.lens_warning as usize,
-            |s, v| s.lens_warning = v as u8,
-        ),
-    },
-    SettingRow {
-        title: "Touch strip",
-        sub: "Zoom with the touch strip",
-        kind: SettingKind::Switch(|s| s.strip_zoom, |s, v| s.strip_zoom = v),
-    },
-];
 
 // the keys of the grid (the mode key, which opens its picker, is apart)
 #[derive(Clone, Copy, PartialEq)]
@@ -702,6 +602,7 @@ struct App {
     flyout_turn: Rotator,
     flyout_text: RefCell<String>,
     flyout_cells: Cell<usize>,
+    bright: Cell<bool>, // the light is bright enough for high contrast (with some hysteresis)
     shutter_flash: Cell<Option<Instant>>,
     flyout_unit: Cell<&'static str>,
     flyout_suffix: Cell<&'static str>, // after the number: "mm"
@@ -751,8 +652,6 @@ struct App {
     stow_anim: RefCell<Option<gtk::TickCallbackId>>,
     compact: Cell<bool>,
     stowed: Cell<bool>,
-    system_turn: Rotator,
-    system_timer: RefCell<Option<glib::SourceId>>,
     picker_turn: Rotator,
     picker_card: gtk::Box,
     picker_rows: Vec<gtk::Button>,
@@ -774,12 +673,14 @@ struct App {
     afd_btn: gtk::Button,
     assist_btn: gtk::Button,
     // the settings screen, and the list a value is chosen from over it
-    settings_list: gtk::ListBox,
-    setting_taps: RefCell<Vec<Rc<dyn Fn()>>>,
-    chooser: gtk::Box,
-    chooser_title: gtk::Label,
-    chooser_list: gtk::ListBox,
-    chooser_pick: RefCell<Option<Rc<dyn Fn(usize)>>>,
+    // the settings screen: its categories and the pane of the one shown
+    settings_nav: gtk::ListBox,
+    settings_pane: gtk::Box,
+    // the sidebar: its panel, the dimmed layer behind it, its quick checkboxes and its About lines
+    side_panel: gtk::Box,
+    scrim: gtk::Box,
+    side_quick: gtk::Box,
+    side_about: gtk::Label,
     cal: wb::Calibration,
     motor: haptics::Haptics,
     // a photo's view preferences for the LRI (white balance, exposure), by its directory
@@ -1191,6 +1092,21 @@ impl App {
         } else {
             self.afd_btn.remove_css_class("on");
         }
+        let high = match st.contrast {
+            1 => true,
+            2 => false,
+            _ => self.bright.get(),
+        };
+        if high != contrast() {
+            CONTRAST.store(high, Ordering::Relaxed);
+            if let Some(w) = self.view.root() {
+                set_class(&w, "contrast", high);
+            }
+            for c in self.encoders.iter().chain([&self.flyout, &self.shutter, &self.hist_area]) {
+                c.queue_draw();
+            }
+            self.enc_shown.set([0; 3]);
+        }
         if st.accent != ACCENT_IDX.load(Ordering::Relaxed) {
             ACCENT_IDX.store(st.accent, Ordering::Relaxed);
             self.css.load_from_string(&css(st.accent));
@@ -1512,95 +1428,6 @@ impl App {
         let meter = self.st.borrow().metering;
         let _ = self.ctl_tx.send((ccb::METERING, meter as i32));
         self.refresh();
-    }
-
-    // a settings row: title, explanation and what goes on the right; its tap
-    fn setting_row(&self, title: &str, sub: &str, right: &[gtk::Widget], tap: Rc<dyn Fn()>) {
-        let t = gtk::Label::new(Some(title));
-        t.add_css_class("set-title");
-        t.set_halign(gtk::Align::Start);
-        let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        text.append(&t);
-        if !sub.is_empty() {
-            let d = gtk::Label::new(Some(sub));
-            d.add_css_class("set-sub");
-            d.set_halign(gtk::Align::Start);
-            text.append(&d);
-        }
-        text.set_hexpand(true);
-        let line = gtk::Box::new(gtk::Orientation::Horizontal, 16);
-        line.append(&text);
-        for w in right {
-            line.append(w);
-        }
-        self.settings_list.append(&line);
-        self.setting_taps.borrow_mut().push(tap);
-    }
-
-    fn switch_row(self: &Rc<Self>, title: &str, sub: &str, get: fn(&State) -> bool, set: fn(&mut State, bool)) {
-        let sw = gtk::Switch::new();
-        sw.set_active(get(&self.st.borrow()));
-        sw.set_valign(gtk::Align::Center);
-        sw.set_can_target(false); // the row's tap flips it
-        let a = self.clone();
-        sw.connect_active_notify(move |sw| {
-            set(&mut a.st.borrow_mut(), sw.is_active());
-            a.setting_changed();
-        });
-        let s = sw.clone();
-        self.setting_row(title, sub, &[sw.upcast()], Rc::new(move || s.set_active(!s.is_active())));
-    }
-
-    fn choice_row(self: &Rc<Self>, title: &'static str, sub: &str, options: Vec<String>, now: usize, pick: Rc<dyn Fn(usize)>) {
-        let value = gtk::Label::new(options.get(now).map(String::as_str));
-        value.add_css_class("set-value");
-        let chevron = icons::label(icons::CHEVRON_RIGHT);
-        chevron.add_css_class("set-chevron");
-        let a = self.clone();
-        self.setting_row(title, sub, &[value.upcast(), chevron.upcast()], Rc::new(move || {
-            a.open_chooser(title, &options, now, pick.clone());
-        }));
-    }
-
-    fn open_chooser(&self, title: &str, options: &[String], now: usize, pick: Rc<dyn Fn(usize)>) {
-        self.chooser_title.set_text(title);
-        while let Some(c) = self.chooser_list.first_child() {
-            self.chooser_list.remove(&c);
-        }
-        for (k, o) in options.iter().enumerate() {
-            let l = gtk::Label::new(Some(o));
-            l.add_css_class("set-title");
-            l.set_halign(gtk::Align::Start);
-            l.set_hexpand(true);
-            let check = if k == now { icons::label(icons::CHECK) } else { gtk::Label::new(None) };
-            check.add_css_class("chooser-check");
-            let b = gtk::Box::new(gtk::Orientation::Horizontal, 16);
-            b.append(&l);
-            b.append(&check);
-            self.chooser_list.append(&b);
-        }
-        *self.chooser_pick.borrow_mut() = Some(pick);
-        self.chooser.set_visible(true);
-    }
-
-    // the settings screen: first the toolbar's settings that aren't on the toolbar, then
-    // the toolbar's own, then the rest
-    fn fill_settings(self: &Rc<Self>) {
-        while let Some(c) = self.settings_list.first_child() {
-            self.settings_list.remove(&c);
-        }
-        self.setting_taps.borrow_mut().clear();
-        for row in SETTINGS {
-            match row.kind {
-                SettingKind::Switch(get, set) => self.switch_row(row.title, row.sub, get, set),
-                SettingKind::Choice(options, get, set) => {
-                    let now = get(&self.st.borrow());
-                    let a = self.clone();
-                    let names = options.iter().map(|o| o.to_string()).collect();
-                    self.choice_row(row.title, row.sub, names, now, Rc::new(move |k| set(&mut a.st.borrow_mut(), k)));
-                }
-            }
-        }
     }
 
     fn choose(&self, o: Opt, k: usize) {
@@ -2512,6 +2339,14 @@ impl App {
             .and_then(|l| l.cached_property("LightLevel"))
             .and_then(|v| v.get::<f64>())
             .unwrap_or(f64::MAX);
+        // high contrast in bright light: on above 5000 lux, off again below 3000
+        if lux.is_finite() && lux < f64::MAX {
+            let now = self.bright.get();
+            if (!now && lux > 5000.0) || (now && lux < 3000.0) {
+                self.bright.set(!now);
+                self.refresh();
+            }
+        }
         let pocketed = self.blocked.load(Ordering::Relaxed).count_ones() >= 2 && lux < 2.0;
         let since = {
             let mut st = self.st.borrow_mut();
@@ -3343,22 +3178,81 @@ impl App {
         }
     }
 
-    // settings and close: in by a swipe from the left edge, away after a few seconds
-    fn show_system(self: &Rc<Self>, on: bool) {
-        set_class(&self.system_turn, "sys-hidden", !on);
-        self.system_turn.set_can_target(on);
-        if let Some(id) = self.system_timer.borrow_mut().take() {
-            id.remove();
+    // ---- the sidebar and the settings screen
+
+    // the app's and the system's versions, for the About pane and the sidebar's foot
+    fn about_lines(&self) -> Vec<String> {
+        let os = std::fs::read_to_string("/etc/os-release")
+            .ok()
+            .and_then(|t| t.lines().find_map(|l| l.strip_prefix("PRETTY_NAME=").map(|v| v.trim_matches('"').to_string())))
+            .unwrap_or_else(|| "unknown system".into());
+        let mut u: libc::utsname = unsafe { std::mem::zeroed() };
+        let kernel = if unsafe { libc::uname(&mut u) } == 0 {
+            let r = unsafe { std::ffi::CStr::from_ptr(u.release.as_ptr()) };
+            format!("Linux {}", r.to_string_lossy())
+        } else {
+            "Linux".into()
+        };
+        vec![
+            format!("Viewfinder 2  v{}", env!("CARGO_PKG_VERSION")),
+            os,
+            kernel,
+            gst::version_string().to_string(),
+            if self.ccb.is_some() { "camera driver: light-ccb".into() } else { "no camera driver".into() },
+        ]
+    }
+
+    // the sidebar in or out (the dimmed layer with it)
+    fn show_sidebar(self: &Rc<Self>, on: bool) {
+        if on == !self.side_panel.has_css_class("side-hidden") {
+            return;
         }
+        set_class(&self.side_panel, "side-hidden", !on);
+        set_class(&self.scrim, "off", !on);
+        self.side_panel.set_can_target(on);
+        self.scrim.set_can_target(on);
         if on {
+            self.fill_sidebar();
             self.buzz(10);
-            let a = self.clone();
-            let id = glib::timeout_add_local_once(Duration::from_secs(6), move || {
-                *a.system_timer.borrow_mut() = None;
-                a.show_system(false);
-            });
-            *self.system_timer.borrow_mut() = Some(id);
         }
+    }
+
+    // the quick checkboxes, from the state as it is now, and the About lines at the foot
+    fn fill_sidebar(self: &Rc<Self>) {
+        while let Some(c) = self.side_quick.first_child() {
+            self.side_quick.remove(&c);
+        }
+        let items: [(&str, fn(&State) -> bool, fn(&mut State, bool)); 4] = [
+            ("High contrast", |s| s.contrast == 1, |s, v| s.contrast = if v { 1 } else { 0 }),
+            ("Geotagging", |s| s.geotag, |s, v| s.geotag = v),
+            ("Shutter sparkle", |s| s.sparkle, |s, v| s.sparkle = v),
+            ("Haptics", |s| s.haptics != 0, |s, v| s.haptics = if v { 1 } else { 0 }),
+        ];
+        for (name, get, set) in items {
+            let a = self.clone();
+            self.side_quick.append(&settings_ui::check(name, get(&self.st.borrow()), move |v| {
+                set(&mut a.st.borrow_mut(), v);
+                a.setting_changed();
+            }));
+        }
+        let lines = self.about_lines();
+        self.side_about.set_text(&format!("{}\n{}\n{}", lines[0], lines[1], lines[2]));
+    }
+
+    // the settings screen: the categories, the first one shown
+    fn fill_settings(self: &Rc<Self>) {
+        while let Some(c) = self.settings_nav.first_child() {
+            self.settings_nav.remove(&c);
+        }
+        for section in settings_ui::SECTIONS {
+            let l = gtk::Label::new(Some(section.name));
+            l.set_xalign(0.0);
+            self.settings_nav.append(&l);
+        }
+        if let Some(row) = self.settings_nav.row_at_index(0) {
+            self.settings_nav.select_row(Some(&row));
+        }
+        settings_ui::fill_pane(self, &self.settings_pane, 0);
     }
 
     fn dial_active(&self, dial: Dial) -> bool {
@@ -3427,7 +3321,7 @@ impl App {
     fn draw_encoder(&self, cr: &cairo::Context, w: f64, h: f64, dial: Dial) {
         let st = self.st.borrow();
         let (name, value, frac, active) = encoder_shows(&st, dial);
-        let on = if active { (accent().0, accent().1, accent().2, 1.0) } else { (0.95, 0.95, 0.93, 0.62) };
+        let on = if active { (accent().0, accent().1, accent().2, 1.0) } else { (0.95, 0.95, 0.93, if contrast() { 0.95 } else { 0.62 }) };
         let (cx, cy, r) = (w / 2.0, h * 0.36, w.min(h) * 0.27);
         let n = 36;
         let lit = (frac.clamp(0.0, 1.0) * n as f64).round() as usize;
@@ -3437,7 +3331,7 @@ impl App {
             if k < lit {
                 cr.set_source_rgba(on.0, on.1, on.2, on.3);
             } else {
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.13);
+                cr.set_source_rgba(1.0, 1.0, 1.0, if contrast() { 0.32 } else { 0.13 });
             }
             cr.arc(x, y, 1.7, 0.0, 2.0 * PI);
             let _ = cr.fill();
@@ -3881,25 +3775,49 @@ fn build(gapp: &gtk::Application) {
         b.add_css_class("spin");
         key_grid.attach(b, (k % 3) as i32, (k / 3) as i32, 1, 1);
     }
-    let settings_btn = icons::button(icons::COG, "");
-    let close_btn = icons::button(icons::CLOSE, "");
-    for b in [&settings_btn, &close_btn] {
-        b.add_css_class("flat-white");
-        b.add_css_class("spin");
+    // the sidebar (a swipe in from the left edge): settings and close, the quick checkboxes, and
+    // the About lines at the foot, over a dimmed viewfinder
+    let side_row = |icon: char, name: &str| {
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 18);
+        line.append(&icons::label(icon));
+        let l = gtk::Label::new(Some(name));
+        l.set_xalign(0.0);
+        line.append(&l);
+        let b = gtk::Button::new();
+        b.set_child(Some(&line));
+        b.add_css_class("side-row");
+        b
+    };
+    let settings_btn = side_row(icons::COG, "Settings");
+    let close_btn = side_row(icons::CLOSE, "Close the camera");
+    let side_title = gtk::Label::new(Some("VIEWFINDER 2"));
+    side_title.add_css_class("side-title");
+    side_title.set_xalign(0.0);
+    let side_head = gtk::Label::new(Some("QUICK SETTINGS"));
+    side_head.add_css_class("side-head");
+    side_head.set_xalign(0.0);
+    let side_quick = gtk::Box::new(gtk::Orientation::Vertical, 14);
+    side_quick.add_css_class("side-quick");
+    let side_about = gtk::Label::new(None);
+    side_about.add_css_class("side-about");
+    side_about.set_xalign(0.0);
+    let side_fill = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    side_fill.set_vexpand(true);
+    let side_panel = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    side_panel.add_css_class("sidebar");
+    side_panel.add_css_class("side-hidden");
+    side_panel.set_size_request(320, -1);
+    side_panel.set_halign(gtk::Align::Start);
+    side_panel.set_valign(gtk::Align::Fill);
+    side_panel.set_can_target(false);
+    for w in [side_title.upcast_ref::<gtk::Widget>(), settings_btn.upcast_ref(), close_btn.upcast_ref(), side_head.upcast_ref(), side_quick.upcast_ref(), side_fill.upcast_ref(), side_about.upcast_ref()] {
+        side_panel.append(w);
     }
-    // the system panel (settings, close): tucked away, brought in by a swipe from the left edge
-    let system_card = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    system_card.add_css_class("system");
-    system_card.append(&settings_btn);
-    system_card.append(&close_btn);
-    let system_turn = turn(system_card.upcast_ref());
-    system_turn.set_halign(gtk::Align::Start);
-    system_turn.set_valign(gtk::Align::Start);
-    system_turn.set_margin_start(10);
-    system_turn.set_margin_top(56);
-    system_turn.add_css_class("sys");
-    system_turn.add_css_class("sys-hidden");
-    system_turn.set_can_target(false);
+    let scrim = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    scrim.add_css_class("scrim");
+    scrim.add_css_class("fade");
+    scrim.add_css_class("off");
+    scrim.set_can_target(false);
     // the mode picker: a card of rows, each the mode's icon and full name
     let picker_card = gtk::Box::new(gtk::Orientation::Vertical, 2);
     picker_card.add_css_class("picker");
@@ -3970,43 +3888,34 @@ fn build(gapp: &gtk::Application) {
     deck.add_overlay(&right);
 
     // the settings screen (OpenLight's: a list of title, explanation and value)
-    let settings_list = gtk::ListBox::new();
-    settings_list.set_selection_mode(gtk::SelectionMode::None);
-    let settings_scroll = gtk::ScrolledWindow::new();
-    settings_scroll.set_child(Some(&settings_list));
-    settings_scroll.set_vexpand(true);
-    settings_scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
+    let settings_nav = gtk::ListBox::new();
+    settings_nav.add_css_class("nav");
+    settings_nav.set_selection_mode(gtk::SelectionMode::Single);
+    let nav_scroll = gtk::ScrolledWindow::new();
+    nav_scroll.set_child(Some(&settings_nav));
+    nav_scroll.set_size_request(250, -1);
+    nav_scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
+    let settings_pane = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    settings_pane.add_css_class("pane");
+    let pane_scroll = gtk::ScrolledWindow::new();
+    pane_scroll.set_child(Some(&settings_pane));
+    pane_scroll.set_hexpand(true);
+    pane_scroll.set_vexpand(true);
+    pane_scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
     let settings_back = icons::button(icons::ARROW_LEFT, "settings");
     settings_back.add_css_class("flat-white");
     settings_back.set_halign(gtk::Align::Start);
     settings_back.set_margin_start(16);
+    let settings_body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    settings_body.append(&nav_scroll);
+    settings_body.append(&pane_scroll);
     let settings_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     settings_box.add_css_class("settings");
     settings_box.append(&settings_back);
-    settings_box.append(&settings_scroll);
+    settings_box.append(&settings_body);
     let settings_page = gtk::Overlay::new();
     settings_page.set_child(Some(&turn(settings_box.upcast_ref())));
     settings_page.set_visible(false);
-    // the list a setting's value is chosen from, over the settings screen
-    let chooser_title = gtk::Label::new(None);
-    chooser_title.add_css_class("chooser-title");
-    chooser_title.set_halign(gtk::Align::Start);
-    let chooser_list = gtk::ListBox::new();
-    chooser_list.set_selection_mode(gtk::SelectionMode::None);
-    let chooser_card = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    chooser_card.add_css_class("chooser-card");
-    chooser_card.set_halign(gtk::Align::Center);
-    chooser_card.set_valign(gtk::Align::Center);
-    chooser_card.set_size_request(420, -1);
-    chooser_card.set_overflow(gtk::Overflow::Hidden);
-    chooser_card.append(&chooser_title);
-    chooser_card.append(&chooser_list);
-    let chooser = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    chooser.add_css_class("chooser");
-    chooser_card.set_vexpand(true);
-    chooser.append(&turn(chooser_card.upcast_ref()));
-    chooser.set_visible(false);
-    settings_page.add_overlay(&chooser);
     // the notices at the top of the screen: a small pill, and under it an alert with a line of text
     let pill_label = gtk::Label::new(None);
     pill_label.add_css_class("pill");
@@ -4187,7 +4096,8 @@ fn build(gapp: &gtk::Application) {
     root.add_overlay(&countdown);
     root.add_overlay(&burst_screen);
     root.add_overlay(&flyout_turn);
-    root.add_overlay(&system_turn);
+    root.add_overlay(&scrim);
+    root.add_overlay(&side_panel);
     root.add_overlay(&picker_turn);
     root.add_overlay(&battery_screen);
     root.add_overlay(&hot_screen);
@@ -4241,6 +4151,7 @@ fn build(gapp: &gtk::Application) {
             histogram: false,
             assist: 0,
             accent: 0,
+            contrast: 0,
             sparkle: true,
             pinned: 1,
             strip_fn: 0,
@@ -4364,6 +4275,7 @@ fn build(gapp: &gtk::Application) {
         flyout_turn: flyout_turn.clone(),
         flyout_text: RefCell::new(String::new()),
         flyout_cells: Cell::new(4),
+        bright: Cell::new(false),
         shutter_flash: Cell::new(None),
         flyout_unit: Cell::new(""),
         flyout_suffix: Cell::new(""),
@@ -4403,8 +4315,10 @@ fn build(gapp: &gtk::Application) {
         stow_anim: RefCell::new(None),
         compact: Cell::new(false),
         stowed: Cell::new(false),
-        system_turn,
-        system_timer: RefCell::new(None),
+        side_panel: side_panel.clone(),
+        scrim: scrim.clone(),
+        side_quick: side_quick.clone(),
+        side_about: side_about.clone(),
         picker_turn,
         picker_card,
         picker_rows,
@@ -4423,12 +4337,8 @@ fn build(gapp: &gtk::Application) {
         wb_btn,
         afd_btn,
         assist_btn,
-        settings_list,
-        setting_taps: RefCell::new(Vec::new()),
-        chooser: chooser.clone(),
-        chooser_title,
-        chooser_list: chooser_list.clone(),
-        chooser_pick: RefCell::new(None),
+        settings_nav: settings_nav.clone(),
+        settings_pane: settings_pane.clone(),
         cal: wb::Calibration::load(),
         motor: haptics::Haptics::open(),
         photo_args: RefCell::new(HashMap::new()),
@@ -4504,8 +4414,8 @@ fn build(gapp: &gtk::Application) {
             a.close_picker();
             return;
         }
-        if !a.system_turn.has_css_class("sys-hidden") {
-            a.show_system(false);
+        if !a.side_panel.has_css_class("side-hidden") {
+            a.show_sidebar(false);
             return;
         }
         a.focus(Some((x, y)));
@@ -4611,10 +4521,25 @@ fn build(gapp: &gtk::Application) {
         if from_edge.get() && !shown.get() && dx > 44.0 && dx > dy.abs() * 1.5 {
             shown.set(true);
             g.set_state(gtk::EventSequenceState::Claimed);
-            a.show_system(true);
+            a.show_sidebar(true);
         }
     });
     root.add_controller(edge);
+    // the sidebar goes with a tap on the dimmed layer, or a swipe back to the left
+    let tap = gtk::GestureClick::new();
+    let a = app.clone();
+    tap.connect_released(move |_, _, _, _| a.show_sidebar(false));
+    scrim.add_controller(tap);
+    let back = gtk::GestureDrag::new();
+    back.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let a = app.clone();
+    back.connect_drag_update(move |g, dx, dy| {
+        if dx < -60.0 && dx.abs() > dy.abs() * 1.5 {
+            g.set_state(gtk::EventSequenceState::Claimed);
+            a.show_sidebar(false);
+        }
+    });
+    side_panel.add_controller(back);
     // (developer) SIGWINCH: a pill and an alert, to see them on the device
     {
         let a = app.clone();
@@ -4652,8 +4577,7 @@ fn build(gapp: &gtk::Application) {
     }
     let a = app.clone();
     settings_btn.connect_clicked(move |_| {
-        a.show_system(false);
-        a.chooser.set_visible(false);
+        a.show_sidebar(false);
         a.fill_settings();
         a.settings_page.set_visible(true);
         a.follow_screen();
@@ -4674,39 +4598,13 @@ fn build(gapp: &gtk::Application) {
             a.follow_screen();
         }
     });
-    // the settings screen's rows and the chooser's taps
+    // the settings screen's categories
     let a = app.clone();
-    app.settings_list.connect_row_activated(move |_, r| {
-        let tap = a.setting_taps.borrow().get(r.index() as usize).cloned();
-        if let Some(tap) = tap {
-            tap();
+    app.settings_nav.connect_row_selected(move |_, row| {
+        if let Some(row) = row {
+            settings_ui::fill_pane(&a, &a.settings_pane, row.index() as usize);
         }
     });
-    let a = app.clone();
-    app.chooser_list.connect_row_activated(move |_, r| {
-        let pick = a.chooser_pick.borrow_mut().take();
-        a.chooser.set_visible(false);
-        if let Some(pick) = pick {
-            pick(r.index() as usize);
-            a.setting_changed();
-            let a = a.clone();
-            glib::idle_add_local_once(move || a.fill_settings());
-        }
-    });
-    // a tap beside the list: nothing chosen
-    let backdrop = gtk::GestureClick::new();
-    let a = app.clone();
-    let card = chooser_card.clone();
-    backdrop.connect_released(move |_, _, x, y| {
-        let inside = card.compute_bounds(&a.chooser).is_some_and(|b| {
-            b.contains_point(&gtk::graphene::Point::new(x as f32, y as f32))
-        });
-        if !inside {
-            a.chooser_pick.borrow_mut().take();
-            a.chooser.set_visible(false);
-        }
-    });
-    app.chooser.add_controller(backdrop);
 
     // hardware: shutter button, touch strip
     let a = app.clone();
@@ -4887,13 +4785,25 @@ fn build(gapp: &gtk::Application) {
                     "zoom" => a.set_zoom(70.0),
                     "portrait" => a.apply_quarter(1),
                     "picker" => a.open_picker(),
+                    "contrast" => {
+                        a.st.borrow_mut().contrast = 1;
+                        a.refresh();
+                    }
                     "thermal" => {
                         set_class(&a.thermal_turn, "off", false);
                         a.animate_thermal(1.0);
                     }
                     "lens" => a.show_alert("lens", icons::CAMERA, "Lens blocked", "Something is over a lens: move it away to see the whole frame.", 0),
                     "stow" => a.set_stowed(true),
-                    "system" => a.show_system(true),
+                    "system" => a.show_sidebar(true),
+                    "settings1" | "settings3" | "settings4" => {
+                        a.fill_settings();
+                        a.settings_page.set_visible(true);
+                        let k = match v { "settings1" => 1, "settings3" => 3, _ => 4 };
+                        if let Some(row) = a.settings_nav.row_at_index(k) {
+                            a.settings_nav.select_row(Some(&row));
+                        }
+                    }
                     "bubble" => {
                         let (t, _) = a.tool_note(Tool::Assist);
                         a.show_pill(a.tool_icon(Tool::Assist), &t, 600);
