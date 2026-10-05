@@ -824,7 +824,7 @@ fn exposure_spec(dial: Dial, inverse: bool) -> ruler::Spec {
         ),
         Dial::Ev => ("EV", (-9..=9).map(|e| tick(ev_pos(e), (e % 3 == 0).then(|| fmt_ev(e)))).collect()),
     };
-    // the finger moves the value by 0.001 a pixel (wheel_drag): the scale moves as far
+    // the finger moves the value by 0.001 a pixel (wheel_drag): the pointer moves as far
     ruler::Spec { unit, ticks, px_per_unit: 1000.0, dir }
 }
 
@@ -838,7 +838,7 @@ fn zoom_spec() -> ruler::Spec {
             label: PRIMES.contains(&mm).then(|| format!("{mm:.0}")),
         })
         .collect();
-    ruler::Spec { unit: "MM", ticks, px_per_unit: 300.0, dir: 1.0 }
+    ruler::Spec { unit: "MM", ticks, px_per_unit: 300.0, dir: -1.0 }
 }
 
 fn make_pipeline() -> (gst::Pipeline, gdk::Paintable) {
@@ -1527,13 +1527,15 @@ impl App {
         place_on_edge(&self.status_turn, q, true, 14);
         place_on_edge(&self.thermal_turn, q, false, 70);
         place_on_edge(&self.zoom_turn, q, false, 14);
-        // the ruler runs the whole edge
-        place_on_edge(&self.wheels_turn, q, false, 0);
-        if q == 0 {
-            self.wheels_turn.set_halign(gtk::Align::Fill);
-        } else {
-            self.wheels_turn.set_valign(gtk::Align::Fill);
-        }
+        // the ruler runs the whole right edge as the camera is held: the right, or (turned)
+        // the bottom with the shutter down, the top with it up
+        let (h, v) = match q {
+            0 => (gtk::Align::End, gtk::Align::Fill),
+            1 => (gtk::Align::Fill, gtk::Align::End),
+            _ => (gtk::Align::Fill, gtk::Align::Start),
+        };
+        self.wheels_turn.set_halign(h);
+        self.wheels_turn.set_valign(v);
     }
 
     // degrees between the mode wheel's labels (stock's 2 and 4 dip, as angles)
@@ -3012,15 +3014,15 @@ impl App {
         self.update_wheels();
     }
 
-    // the finger @dx along the ruler (in the UI's own direction): the scale goes with it, so
-    // the value falls as it moves right
-    fn wheel_drag(&self, dx: f64) {
+    // the finger @dy down the screen: the old swipe, up for more and down for less (a greater
+    // position is a lower ISO or shutter value)
+    fn wheel_drag(&self, dy: f64) {
         let (dial, start, dir) = {
             let st = self.st.borrow();
             (st.wheel, st.wheel_start, if st.inverse_wheel { -1.0 } else { 1.0 })
         };
         if let Some(dial) = dial {
-            self.set_dial(dial, start - dir * dx * 0.001);
+            self.set_dial(dial, start + dir * dy * 0.001);
         }
     }
 
@@ -3537,11 +3539,12 @@ fn build(gapp: &gtk::Application) {
 
     // shown only while a wheel is (exposure, or zoom just changed)
     let wheels = Ruler::new();
-    wheels.set_halign(gtk::Align::Fill);
-    wheels.set_valign(gtk::Align::End);
-    wheels.set_margin_start(12);
-    wheels.set_margin_end(12);
-    wheels.set_margin_bottom(12);
+    wheels.set_halign(gtk::Align::End);
+    wheels.set_valign(gtk::Align::Fill);
+    wheels.set_margin_top(8);
+    wheels.set_margin_bottom(8);
+    wheels.set_margin_start(8);
+    wheels.set_margin_end(8);
     let wheels_turn = turn(wheels.upcast_ref());
     wheels_turn.add_css_class("fade");
     wheels_turn.add_css_class("off");
@@ -3956,8 +3959,6 @@ fn build(gapp: &gtk::Application) {
         }
     });
     let a = app.clone();
-
-    let a = app.clone();
     app.lens_badge.set_draw_func(move |_, cr, w, h| a.draw_lens_blocked(cr, w as f64, h as f64));
     let a = app.clone();
     app.top.set_draw_func(move |_, cr, w, h| a.draw_dial(cr, w as f64, h as f64, true));
@@ -4023,9 +4024,7 @@ fn build(gapp: &gtk::Application) {
     });
     app.view.add_controller(pinch);
 
-    // the dials: tap and drag (which dial is which depends on the mode). The drag moves the
-    // ruler along the preview's bottom edge: sideways as the camera is held, so in portrait it
-    // is the screen's vertical
+    // the dials: tap and drag (which dial is which depends on the mode): up for more, down for less
     for (widget, top) in [(app.top.clone(), true), (app.bottom.clone(), false)] {
         let drag = gtk::GestureDrag::new();
         let a = app.clone();
@@ -4035,10 +4034,7 @@ fn build(gapp: &gtk::Application) {
             a.wheel_grab(dial);
         });
         let a = app.clone();
-        drag.connect_drag_update(move |_, dx, dy| {
-            let q = a.quarter.get();
-            a.wheel_drag(if q == 0 { dx } else { q as f64 * dy });
-        });
+        drag.connect_drag_update(move |_, _, dy| a.wheel_drag(dy));
         let a = app.clone();
         drag.connect_drag_end(move |_, _, _| a.wheel_release());
         widget.add_controller(drag);
@@ -4052,7 +4048,7 @@ fn build(gapp: &gtk::Application) {
         }
     });
     let a = app.clone();
-    bar_drag.connect_drag_update(move |_, dx, _| a.wheel_drag(dx));
+    bar_drag.connect_drag_update(move |_, _, dy| a.wheel_drag(dy));
     let a = app.clone();
     bar_drag.connect_drag_end(move |_, _, _| a.wheel_release());
     app.wheels.add_controller(bar_drag);
