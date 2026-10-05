@@ -33,7 +33,7 @@ use std::f64::consts::PI;
 use std::path::PathBuf;
 use std::process::Command;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -65,16 +65,35 @@ const ZOOM_MAX: f64 = 150.0;
 // the 150 mm modules; it crops B4)
 const MODULE_MM: [f64; 2] = [28.0, 70.0];
 // orange: what the photographer has set; green: in focus, fine; red: clipping, warnings
-const ACCENT: (f64, f64, f64) = (1.0, 0.353, 0.122); // #FF5A1F, Teenage Engineering's orange
+// the accent colours the settings offer: name, CSS colour, and the same as RGB for the drawing code
+const ACCENTS: &[(&str, &str, (f64, f64, f64))] = &[
+    ("Blue", "#00B1ED", (0.0, 0.694, 0.929)),
+    ("Orange", "@accent", (1.0, 0.353, 0.122)),
+    ("Green", "#3DDC84", (0.239, 0.863, 0.518)),
+    ("Pink", "#FF4F9A", (1.0, 0.310, 0.604)),
+    ("Amber", "#FFB02E", (1.0, 0.690, 0.180)),
+    ("White", "#F2F2EE", (0.949, 0.949, 0.933)),
+];
+static ACCENT_IDX: AtomicUsize = AtomicUsize::new(0);
+
+// the accent now (a setting; blue by default)
+fn accent() -> (f64, f64, f64) {
+    ACCENTS[ACCENT_IDX.load(Ordering::Relaxed).min(ACCENTS.len() - 1)].2
+}
+
+// the stylesheet for the accent @idx
+fn css(idx: usize) -> String {
+    format!("@define-color accent {};\n{CSS}", ACCENTS[idx.min(ACCENTS.len() - 1)].1)
+}
 const STRIP_LEN: f64 = 768.0;
 // the flyout beside an encoder
-const FLYOUT: (i32, i32) = (240, 112);
+const FLYOUT: (i32, i32) = (280, 84 + ruler::HEIGHT);
 const HIST_BINS: usize = 64;
 
 const CSS: &str = "
 window.camera { background: #000; color: #f2f2ee; font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; }
 .mono, .set-value, .countdown, .burst-count { font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; }
-.flyout { background: #101012; border: 1px solid rgba(255,90,31,0.55); border-radius: 10px; }
+.flyout { background: #101012; border: 1px solid alpha(@accent, 0.55); border-radius: 10px; }
 .encoder { background: #121214; border: 1px solid rgba(255,255,255,0.09); border-radius: 10px;
     transition: border-color 160ms ease; }
 button.flat-white { background: none; border: none; box-shadow: none; outline: none; color: #f2f2ee;
@@ -86,19 +105,19 @@ button.flat-white:active { background: rgba(255,255,255,0.10); }
     font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
     transition: background 120ms ease, color 120ms ease, box-shadow 160ms ease; }
 .key:active { background: #232327; }
-.key.on { color: #FF5A1F; box-shadow: inset 0 3px 0 #FF5A1F; }
+.key.on { color: @accent; box-shadow: inset 0 3px 0 @accent; }
 .seg { background: #151517; border: 1px solid rgba(255,255,255,0.09); box-shadow: none; outline: none; padding: 0;
     border-radius: 6px; min-height: 38px; min-width: 0;
     color: rgba(242,242,238,0.7); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
     font-size: 11px; font-weight: 700; letter-spacing: 1px;
     transition: background 140ms ease, color 140ms ease; }
-.seg.on { background: #FF5A1F; border-color: #FF5A1F; color: #0b0b0c; }
+.seg.on { background: @accent; border-color: @accent; color: #0b0b0c; }
 .zoom-pill { background: #121214; border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; padding: 3px; }
 .zoom-chip { background: none; border: none; box-shadow: none; outline: none; padding: 0; border-radius: 6px;
     color: rgba(242,242,238,0.75); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
     font-size: 12px; font-weight: 700; min-width: 58px; min-height: 34px;
     transition: background 140ms ease, color 140ms ease; }
-.zoom-chip.active { background: #FF5A1F; color: #0b0b0c; }
+.zoom-chip.active { background: @accent; color: #0b0b0c; }
 .status { color: #f2f2ee; font-size: 15px; font-weight: 600; background: rgba(14,14,16,0.82);
     border: 1px solid rgba(255,255,255,0.10); border-radius: 8px; padding: 5px 16px; }
 .countdown { color: #f2f2ee; font-size: 110px; font-weight: 700; }
@@ -113,9 +132,9 @@ button.flat-white:active { background: rgba(255,255,255,0.10); }
 .battery-screen label { color: #f2f2ee; font-size: 22px; font-weight: 600; }
 .burst-count { color: #f2f2ee; font-size: 56px; }
 .burst-saving { color: rgba(242,242,238,0.8); font-size: 20px; }
-.assist-badge { color: #FF5A1F; font-size: 15px; }
-.burst-badge { color: #FF5A1F; font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 12px;
-    font-weight: 700; border: 1px solid rgba(255,90,31,0.6); border-radius: 8px; padding: 0 6px; }
+.assist-badge { color: @accent; font-size: 15px; }
+.burst-badge { color: @accent; font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 12px;
+    font-weight: 700; border: 1px solid alpha(@accent, 0.6); border-radius: 8px; padding: 0 6px; }
 .settings { background: #000; }
 .settings list { background: #000; }
 .settings row, .chooser row { padding: 16px 32px; border-bottom: 1px solid rgba(255,255,255,0.08);
@@ -123,17 +142,17 @@ button.flat-white:active { background: rgba(255,255,255,0.10); }
 .settings row:active, .chooser row:active { background: rgba(255,255,255,0.08); }
 .set-title { color: #f2f2ee; font-size: 17px; font-weight: 600; }
 .set-sub { color: rgba(242,242,238,0.50); font-size: 13px; }
-.set-value { color: #FF5A1F; font-size: 15px; font-weight: 700; }
+.set-value { color: @accent; font-size: 15px; font-weight: 700; }
 .set-chevron { color: rgba(242,242,238,0.45); font-size: 20px; }
 .settings switch { background: rgba(255,255,255,0.18); border: none; }
-.settings switch:checked { background: #FF5A1F; }
+.settings switch:checked { background: @accent; }
 .settings switch slider { background: #f2f2ee; border: none; box-shadow: none; }
 .chooser { background: rgba(0,0,0,0.65); }
 .chooser-card { background: #16161a; border-radius: 12px; border: 1px solid rgba(255,255,255,0.10); }
 .chooser-card list { background: none; }
 .chooser-title { color: rgba(242,242,238,0.5); font-size: 12px; font-weight: 700; letter-spacing: 2px;
     padding: 18px 32px 8px 32px; }
-.chooser-check { color: #FF5A1F; font-size: 18px; font-weight: 700; }
+.chooser-check { color: @accent; font-size: 18px; font-weight: 700; }
 .spin { transition: transform 50ms ease-in; }
 window.rot-cw .spin { transform: rotate(90deg); }
 window.rot-ccw .spin { transform: rotate(-90deg); }
@@ -196,6 +215,7 @@ struct State {
     grid: u8, // 0 off, 1 3x3, 2 golden ratio
     histogram: bool,
     assist: u8, // focus peaking (1) and zebras (2), as bits
+    accent: usize, // ACCENTS' index
     busy: bool,
     counting: bool,
     saving: u32,
@@ -213,6 +233,7 @@ struct State {
     haptics: u8, // 0 off, 1 normal, 2 strong (stock's)
     continuous: bool, // ISO and shutter anywhere, rather than stock's 1/3-stop list
     zoom_start: f64,
+    zoom_raw: f64, // where the gesture has taken the zoom, before it snaps to a prime
     zoom_wheel_until: Option<Instant>,
     focus_until: Option<Instant>,
     // the focus marks' run: when it started, and its outcome (1 focused, 2 not) and when
@@ -273,7 +294,7 @@ impl State {
         let mode = self.mode.short();
         format!(
             "mode={mode}\niso={}\nshutter={}\nev={}\nflash={}\ntimer={}\ngrid={}\nhistogram={}\nassist={}\nburst={}\n\
-             wb={}\nmetering={}\ncaf={}\nstacked={}\nexposure_info={}\ninverse_wheel={}\nhaptics={}\ncontinuous={}\nstrip_zoom={}\ntoolbar={}\ntool_cycle={}\nlens_warn={}\ndevice_status={}\npocket={}\ngeotag={}\n",
+             wb={}\nmetering={}\ncaf={}\nstacked={}\nexposure_info={}\ninverse_wheel={}\nhaptics={}\ncontinuous={}\nstrip_zoom={}\ntoolbar={}\ntool_cycle={}\nlens_warn={}\ndevice_status={}\npocket={}\ngeotag={}\naccent={}\n",
             self.iso,
             self.shutter,
             self.ev,
@@ -298,6 +319,7 @@ impl State {
             self.device_status as u8,
             self.pocket as u8,
             self.geotag as u8,
+            self.accent,
         )
     }
 
@@ -334,6 +356,7 @@ impl State {
         self.device_status = flag("device_status", self.device_status);
         self.pocket = flag("pocket", self.pocket);
         self.geotag = flag("geotag", self.geotag);
+        self.accent = num("accent").map_or(self.accent, |v| (v as usize).min(ACCENTS.len() - 1));
     }
 }
 
@@ -376,6 +399,15 @@ const SETTINGS: &[SettingRow] = &[
             &["1/3 stop", "Continuous"],
             |s| s.continuous as usize,
             |s, v| s.continuous = v == 1,
+        ),
+    },
+    SettingRow {
+        title: "Accent colour",
+        sub: "The colour of what you have set: values, selected keys, the dials",
+        kind: SettingKind::Choice(
+            &["Blue", "Orange", "Green", "Pink", "Amber", "White"],
+            |s| s.accent,
+            |s, v| s.accent = v,
         ),
     },
     SettingRow {
@@ -535,7 +567,6 @@ struct App {
     marks: Canvas,
     hist_area: Canvas,
     wheels: Ruler,
-    wheels_turn: Rotator,
     // the three encoders (ISO, shutter, EV) and what each was last drawn for (refresh)
     encoders: Vec<Canvas>,
     enc_shown: Cell<[u64; 3]>,
@@ -546,6 +577,9 @@ struct App {
     flyout_turn: Rotator,
     flyout_anim: Rc<NumAnim>,
     flyout_unit: Cell<&'static str>,
+    // where the flyout was last placed (0-2 an encoder, 3 the zoom, 255 hidden)
+    flyout_at: Cell<u8>,
+    css: gtk::CssProvider,
     root: gtk::Overlay,
     shutter: Canvas,
     thumb: gtk::Image,
@@ -805,28 +839,23 @@ fn set_class(w: &impl IsA<gtk::Widget>, class: &str, on: bool) {
     }
 }
 
-// the ruler's scale for an exposure value: its list's entries, labelled where there is room
-// (every ISO; the whole stops of shutter and EV)
-fn exposure_spec(dial: Dial, inverse: bool) -> ruler::Spec {
-    let dir = if inverse { -1.0 } else { 1.0 };
+// the number line's scale for an exposure value: its list's entries, labelled where there is room
+// (every ISO; the whole stops of shutter and EV); the higher values to the right
+fn exposure_spec(dial: Dial) -> ruler::Spec {
     let tick = |pos: f64, label: Option<String>| ruler::Tick { pos, label };
-    let (unit, ticks) = match dial {
-        Dial::Iso => ("ISO", ISO.iter().map(|&i| tick(iso_pos(i as f64), Some(i.to_string()))).collect()),
-        Dial::Shutter => (
-            "SHUTTER",
-            SHUTTER
-                .iter()
-                .enumerate()
-                .map(|(k, s)| tick(secs_pos(shutter_secs(s)), (k % 3 == 0).then(|| s.to_string())))
-                .collect(),
-        ),
-        Dial::Ev => ("EV", (-9..=9).map(|e| tick(ev_pos(e), (e % 3 == 0).then(|| fmt_ev(e)))).collect()),
+    let ticks = match dial {
+        Dial::Iso => ISO.iter().map(|&i| tick(iso_pos(i as f64), Some(i.to_string()))).collect(),
+        Dial::Shutter => SHUTTER
+            .iter()
+            .enumerate()
+            .map(|(k, s)| tick(secs_pos(shutter_secs(s)), (k % 3 == 0).then(|| s.to_string())))
+            .collect(),
+        Dial::Ev => (-9..=9).map(|e| tick(ev_pos(e), (e % 3 == 0).then(|| fmt_ev(e)))).collect(),
     };
-    // the finger moves the value by 0.001 a pixel (wheel_drag): the pointer moves as far
-    ruler::Spec { unit, ticks, px_per_unit: 1000.0, dir, show_value: false }
+    ruler::Spec { ticks, px_per_unit: 520.0, dir: 1.0 }
 }
 
-// the zoom's: focal lengths on a log scale, the primes labelled
+// the zoom's: focal lengths on a log scale, the primes labelled (they are what the zoom snaps to)
 fn zoom_spec() -> ruler::Spec {
     const MM: [f64; 11] = [28.0, 30.0, 35.0, 40.0, 50.0, 60.0, 70.0, 85.0, 100.0, 120.0, 150.0];
     let ticks = MM
@@ -836,7 +865,7 @@ fn zoom_spec() -> ruler::Spec {
             label: PRIMES.contains(&mm).then(|| format!("{mm:.0}")),
         })
         .collect();
-    ruler::Spec { unit: "MM", ticks, px_per_unit: 300.0, dir: -1.0, show_value: true }
+    ruler::Spec { ticks, px_per_unit: 230.0, dir: -1.0 }
 }
 
 fn make_pipeline() -> (gst::Pipeline, gdk::Paintable) {
@@ -991,6 +1020,15 @@ impl App {
             self.afd_btn.add_css_class("on");
         } else {
             self.afd_btn.remove_css_class("on");
+        }
+        if st.accent != ACCENT_IDX.load(Ordering::Relaxed) {
+            ACCENT_IDX.store(st.accent, Ordering::Relaxed);
+            self.css.load_from_string(&css(st.accent));
+            for c in self.encoders.iter().chain([&self.flyout, &self.shutter, &self.hist_area, &self.marks]) {
+                c.queue_draw();
+            }
+            self.focus_area.queue_draw();
+            self.enc_shown.set([0; 3]);
         }
         let saved = st.saved();
         let busy = st.busy;
@@ -1336,15 +1374,6 @@ impl App {
     fn place_status(&self, q: i32) {
         place_on_edge(&self.status_turn, q, true, 14);
         place_on_edge(&self.thermal_turn, q, false, 70);
-        // the ruler runs the whole right edge as the camera is held: the right, or (turned)
-        // the bottom with the shutter down, the top with it up
-        let (h, v) = match q {
-            0 => (gtk::Align::End, gtk::Align::Fill),
-            1 => (gtk::Align::Fill, gtk::Align::End),
-            _ => (gtk::Align::Fill, gtk::Align::Start),
-        };
-        self.wheels_turn.set_halign(h);
-        self.wheels_turn.set_valign(v);
     }
 
     // the driver restarts the ASICs' preview on the new module; the stream carries on
@@ -1382,8 +1411,29 @@ impl App {
         }
     }
 
+    // the zoom to @zoom exactly (a key, a step)
     fn set_zoom(self: &Rc<Self>, zoom: f64) {
         let zoom = zoom.clamp(ZOOM_MIN, ZOOM_MAX);
+        self.st.borrow_mut().zoom_raw = zoom;
+        self.apply_zoom(zoom);
+    }
+
+    // the zoom as a gesture takes it: a finger, the strip. It snaps to the prime focal lengths
+    // (within 3.5 %), and stays there until the gesture has gone 7 % past
+    fn zoom_gesture(self: &Rc<Self>, raw: f64) {
+        let raw = raw.clamp(ZOOM_MIN, ZOOM_MAX);
+        let held = {
+            let mut st = self.st.borrow_mut();
+            st.zoom_raw = raw;
+            PRIMES.iter().copied().find(|&p| {
+                let d = (raw / p).ln().abs();
+                d < 0.035 || ((st.zoom - p).abs() < 0.01 && d < 0.07)
+            })
+        };
+        self.apply_zoom(held.unwrap_or(raw));
+    }
+
+    fn apply_zoom(self: &Rc<Self>, zoom: f64) {
         let before = self.st.borrow().zoom;
         let (lo, hi) = (before.min(zoom), before.max(zoom));
         if PRIMES.iter().any(|&p| p > lo + 0.01 && p <= hi + 0.01 && (p - before).abs() > 0.01) {
@@ -2434,7 +2484,9 @@ impl App {
                     self.st.borrow_mut().strip_x = x;
                     let z = self.st.borrow().zoom;
                     // OpenLight: a full strip length zooms 2.3x
-                    self.set_zoom(z * 2.3f64.powf((x - last) as f64 / STRIP_LEN));
+                    let raw = self.st.borrow().zoom_raw;
+                    let _ = z;
+                    self.zoom_gesture(raw * 2.3f64.powf((x - last) as f64 / STRIP_LEN));
                 }
             }
             input::Ev::StripTouch(true) => {}
@@ -2694,11 +2746,11 @@ impl App {
         }
     }
 
-    // the ruler at the preview's bottom edge, while an exposure value is being set (to drag) or
-    // the zoom has just changed (to read); it fades in and out
+    // the adjust panel: the value in dot matrix over a number line, beside the encoder that is
+    // held, or (for the zoom, which has just changed) at the preview's bottom; it fades in and out
     fn update_wheels(&self) {
-        let (mut shown, mut touch, mut flyout_on) = (false, false, false);
-        let was_off = self.wheels_turn.has_css_class("off");
+        let was_off = self.flyout_turn.has_css_class("off");
+        let mut shown: Option<u8> = None;
         {
             let st = self.st.borrow();
             if let Some(dial) = st.wheel {
@@ -2707,28 +2759,34 @@ impl App {
                     Dial::Shutter => (2, st.shutter, fmt_secs(secs_at(st.shutter))),
                     Dial::Ev => (3, st.ev, fmt_ev(ev_at(st.ev))),
                 };
-                let inverse = st.inverse_wheel;
-                self.wheels.configure(key + if inverse { 10 } else { 0 }, || exposure_spec(dial, inverse));
-                self.wheels.set(pos, &value);
+                self.wheels.configure(key, || exposure_spec(dial));
+                self.wheels.set(pos);
                 self.flyout_unit.set(dial_name(dial));
                 self.flyout_anim.set(&self.flyout, &value, 1.0 - pos);
-                flyout_on = true;
-                (shown, touch) = (true, true);
+                shown = Some(dial_index(dial) as u8);
             } else if st.zoom_wheel_until.is_some_and(|t| Instant::now() < t) {
+                let pos = (st.zoom / ZOOM_MIN).ln();
                 self.wheels.configure(20, zoom_spec);
-                self.wheels.set((st.zoom / ZOOM_MIN).ln(), &format!("{:.0}", st.zoom));
-                shown = true;
+                self.wheels.set(pos);
+                self.flyout_unit.set("MM");
+                self.flyout_anim.set(&self.flyout, &format!("{:.0}", st.zoom), pos);
+                shown = Some(3);
             }
         }
-        if shown && was_off {
-            self.wheels.jump();
+        match shown {
+            Some(at) => {
+                if self.flyout_at.get() != at {
+                    self.place_flyout(at);
+                }
+                if was_off {
+                    self.wheels.jump();
+                }
+            }
+            None => self.flyout_at.set(255),
         }
-        set_class(&self.wheels_turn, "off", !shown);
-        set_class(&self.flyout_turn, "off", !flyout_on);
-        self.wheels_turn.set_can_target(touch);
+        set_class(&self.flyout_turn, "off", shown.is_none());
     }
 
-    // a finger on a dial (or on the ruler, still up): the value to follow it from
     fn dial_active(&self, dial: Dial) -> bool {
         let mode = self.st.borrow().mode;
         match dial {
@@ -2751,7 +2809,7 @@ impl App {
                 Dial::Ev => st.ev,
             };
         }
-        self.place_flyout(dial);
+        self.place_flyout(dial_index(dial) as u8);
         self.buzz(15);
         self.refresh();
         self.update_wheels();
@@ -2795,7 +2853,7 @@ impl App {
     fn draw_encoder(&self, cr: &cairo::Context, w: f64, h: f64, dial: Dial) {
         let st = self.st.borrow();
         let (name, text, frac, active) = encoder_shows(&st, dial);
-        let on = if active { (ACCENT.0, ACCENT.1, ACCENT.2, 1.0) } else { (0.95, 0.95, 0.93, 0.62) };
+        let on = if active { (accent().0, accent().1, accent().2, 1.0) } else { (0.95, 0.95, 0.93, 0.62) };
         let (cx, cy, r) = (w / 2.0, h * 0.36, w.min(h) * 0.27);
         let n = 28;
         let lit = (frac.clamp(0.0, 1.0) * n as f64).round() as usize;
@@ -2822,22 +2880,29 @@ impl App {
     // the flyout: what is being set, large, in dot matrix
     fn draw_flyout(&self, cr: &cairo::Context, w: f64, h: f64) {
         cr.select_font_face("Adwaita Mono", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.55);
-        text(cr, self.flyout_unit.get(), 16.0, 20.0, 12.0, 0.0);
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.5);
+        text(cr, self.flyout_unit.get(), 18.0, 20.0, 11.0, 0.0);
         let value = self.flyout_anim.text();
-        let pitch = dots::fit(&value, w - 36.0, 6.4);
-        let top = 34.0 + (h - 34.0 - 7.0 * pitch) / 2.0 - 6.0;
-        self.flyout_anim.draw(cr, w / 2.0, top, pitch, (ACCENT.0, ACCENT.1, ACCENT.2, 1.0));
+        let pitch = dots::fit(&value, w - 44.0, 5.4);
+        let top = 28.0 + (h - 28.0 - 7.0 * pitch) / 2.0 - 2.0;
+        self.flyout_anim.draw(cr, w / 2.0, top, pitch, (accent().0, accent().1, accent().2, 1.0));
     }
 
-    // the flyout beside the encoder of @dial, centred on its height: to its right, on the
-    // preview, where the thumb that holds the encoder does not cover it
-    fn place_flyout(&self, dial: Dial) {
-        let Some(b) = self.encoders[dial_index(dial)].compute_bounds(&self.root) else { return };
-        let (fw, fh) = if self.quarter.get() == 0 { (FLYOUT.0, FLYOUT.1) } else { (FLYOUT.1, FLYOUT.0) };
-        let _ = fw;
-        self.flyout_turn.set_margin_start((b.x() + b.width() + 8.0) as i32);
-        self.flyout_turn.set_margin_top((b.y() + (b.height() - fh as f32) / 2.0).max(4.0) as i32);
+    // the panel, in place: beside the encoder of a dial (to its right, on the preview, where the
+    // thumb that holds the encoder does not cover it), or for the zoom at the preview's bottom
+    // centre. @at: 0-2 an encoder, 3 the zoom
+    fn place_flyout(&self, at: u8) {
+        let (fw, fh) = if self.quarter.get() == 0 { (FLYOUT.0 as f32, FLYOUT.1 as f32) } else { (FLYOUT.1 as f32, FLYOUT.0 as f32) };
+        let (x, y) = if at < 3 {
+            let Some(b) = self.encoders[at as usize].compute_bounds(&self.root) else { return };
+            (b.x() + b.width() + 10.0, b.y() + (b.height() - fh) / 2.0)
+        } else {
+            let Some(b) = self.view.compute_bounds(&self.root) else { return };
+            (b.x() + (b.width() - fw) / 2.0, b.y() + b.height() - fh - 16.0)
+        };
+        self.flyout_turn.set_margin_start(x.max(4.0) as i32);
+        self.flyout_turn.set_margin_top(y.max(4.0) as i32);
+        self.flyout_at.set(at);
     }
 
     fn draw_shutter(&self, cr: &cairo::Context, w: f64, h: f64) {
@@ -3017,7 +3082,7 @@ fn rounded(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
 
 fn build(gapp: &gtk::Application) {
     let provider = gtk::CssProvider::new();
-    provider.load_from_string(CSS);
+    provider.load_from_string(&css(0));
     gtk::style_context_add_provider_for_display(
         &gdk::Display::default().expect("display"),
         &provider,
@@ -3093,9 +3158,13 @@ fn build(gapp: &gtk::Application) {
         })
         .collect();
     let flyout = Canvas::new();
-    flyout.set_size_request(FLYOUT.0, FLYOUT.1);
-    flyout.add_css_class("flyout");
-    let flyout_turn = turn(flyout.upcast_ref());
+    flyout.set_size_request(FLYOUT.0, 84);
+    let wheels = Ruler::new();
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    card.add_css_class("flyout");
+    card.append(&flyout);
+    card.append(&wheels);
+    let flyout_turn = turn(card.upcast_ref());
     flyout_turn.set_halign(gtk::Align::Start);
     flyout_turn.set_valign(gtk::Align::Start);
     flyout_turn.set_can_target(false);
@@ -3273,18 +3342,6 @@ fn build(gapp: &gtk::Application) {
     chooser.append(&turn(chooser_card.upcast_ref()));
     chooser.set_visible(false);
     settings_page.add_overlay(&chooser);
-    // shown only while a wheel is (exposure, or zoom just changed)
-    let wheels = Ruler::new();
-    wheels.set_halign(gtk::Align::End);
-    wheels.set_valign(gtk::Align::Fill);
-    wheels.set_margin_top(8);
-    wheels.set_margin_bottom(8);
-    wheels.set_margin_start(8);
-    wheels.set_margin_end(8);
-    let wheels_turn = turn(wheels.upcast_ref());
-    wheels_turn.add_css_class("fade");
-    wheels_turn.add_css_class("off");
-    wheels_turn.set_can_target(false);
     let status = gtk::Label::new(None);
     status.add_css_class("status");
     status.set_valign(gtk::Align::Start);
@@ -3440,7 +3497,6 @@ fn build(gapp: &gtk::Application) {
     preview.add_overlay(&lens_badge);
     // on the preview, at its bottom edge as the camera is held (place_status)
     preview.add_overlay(&thermal_turn);
-    preview.add_overlay(&wheels_turn);
     root.add_overlay(&status_box_turn);
     preview.add_overlay(&status_turn);
     root.add_overlay(&countdown);
@@ -3497,6 +3553,7 @@ fn build(gapp: &gtk::Application) {
             grid: 0,
             histogram: false,
             assist: 0,
+            accent: 0,
             busy: false,
             counting: false,
             saving: 0,
@@ -3513,6 +3570,7 @@ fn build(gapp: &gtk::Application) {
             haptics: 1,
             continuous: false,
             zoom_start: ZOOM_MIN,
+            zoom_raw: ZOOM_MIN,
             zoom_wheel_until: None,
             focus_until: None,
             focus_t0: None,
@@ -3596,7 +3654,6 @@ fn build(gapp: &gtk::Application) {
         hist_area,
         focus_area,
         wheels,
-        wheels_turn,
         encoders,
         enc_shown: Cell::new([0; 3]),
         enc_anim: (0..3).map(|_| NumAnim::new()).collect(),
@@ -3604,6 +3661,8 @@ fn build(gapp: &gtk::Application) {
         flyout_turn: flyout_turn.clone(),
         flyout_anim: NumAnim::new(),
         flyout_unit: Cell::new(""),
+        flyout_at: Cell::new(255),
+        css: provider.clone(),
         root: root.clone(),
         shutter,
         thumb,
@@ -3728,7 +3787,7 @@ fn build(gapp: &gtk::Application) {
         if dy.abs() > 8.0 {
             a.st.borrow_mut().dragged = true;
             let z = a.st.borrow().zoom_start;
-            a.set_zoom(z * 2.3f64.powf(-dy / 400.0));
+            a.zoom_gesture(z * 2.3f64.powf(-dy / 400.0));
         }
     });
     app.view.add_controller(drag);
@@ -3742,7 +3801,7 @@ fn build(gapp: &gtk::Application) {
     let a = app.clone();
     pinch.connect_scale_changed(move |_, s| {
         let z = a.st.borrow().zoom_start;
-        a.set_zoom(z * s);
+        a.zoom_gesture(z * s);
     });
     app.view.add_controller(pinch);
 
@@ -3763,20 +3822,6 @@ fn build(gapp: &gtk::Application) {
         drag.connect_drag_end(move |_, _, _| a.wheel_release());
         c.add_controller(drag);
     }
-    // and the ruler itself, while it shows (a touch on it is in its own, turned, coordinates)
-    let bar_drag = gtk::GestureDrag::new();
-    let a = app.clone();
-    bar_drag.connect_drag_begin(move |_, _, _| {
-        if let Some(dial) = a.st.borrow().wheel {
-            a.wheel_grab(dial);
-        }
-    });
-    let a = app.clone();
-    bar_drag.connect_drag_update(move |_, _, dy| a.wheel_drag(dy));
-    let a = app.clone();
-    bar_drag.connect_drag_end(move |_, _, _| a.wheel_release());
-    app.wheels.add_controller(bar_drag);
-
     let click = gtk::GestureClick::new();
     let a = app.clone();
     click.connect_released(move |_, _, _, _| a.shutter_pressed());
@@ -4023,9 +4068,9 @@ fn build(gapp: &gtk::Application) {
                             _ => Dial::Ev,
                         });
                         a.place_flyout(match v {
-                            "iso" => Dial::Iso,
-                            "shutter" => Dial::Shutter,
-                            _ => Dial::Ev,
+                            "iso" => 0,
+                            "shutter" => 1,
+                            _ => 2,
                         });
                         a.update_wheels();
                         a.refresh();
