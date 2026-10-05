@@ -39,6 +39,12 @@ pub const MOON: char = '\u{f0594}'; // weather-night: stock's low-light assist (
 // focus peaking and zebras (image-filter-center-focus, and its weak variant when off)
 pub const ASSIST: char = '\u{f02f1}';
 pub const ASSIST_OFF: char = '\u{f02f2}';
+// the modes (auto-fix, camera-iris, camera-timer, tune), metering (centre, spot, matrix), geotag, preset
+pub const MODES: [char; 4] = ['\u{f0068}', '\u{f0104}', '\u{f0109}', '\u{f062e}'];
+pub const METER: [char; 3] = ['\u{f07a2}', '\u{f07a5}', '\u{f07a3}'];
+pub const GEO: char = '\u{f034e}';
+pub const GEO_OFF: char = '\u{f0351}';
+pub const PRESET: char = '\u{f04e1}';
 pub const CHEVRON_DOWN: char = '\u{f0140}';
 // Lightbox's menu and selection
 pub const MORE: char = '\u{f01d9}'; // dots-vertical
@@ -81,7 +87,7 @@ pub fn label(icon: char) -> gtk::Label {
 pub fn set_key(b: &gtk::Button, icon: char, caption: &str) {
     let caption = gtk::glib::markup_escape_text(caption);
     b.set_label(&format!(
-        "<span font_family=\"{FAMILY}\" size=\"175%\">{icon}</span>\n<span size=\"72%\" weight=\"bold\">{caption}</span>"
+        "<span font_family=\"{FAMILY}\" size=\"195%\">{icon}</span>\n<span size=\"88%\" weight=\"bold\">{caption}</span>"
     ));
     if let Some(l) = b.child().and_downcast::<gtk::Label>() {
         l.set_use_markup(true);

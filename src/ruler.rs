@@ -11,7 +11,7 @@ use gtk::pango;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 
-pub const HEIGHT: i32 = 40;
+pub const HEIGHT: i32 = 48;
 const GLIDE_SECS: f64 = 0.05; // the ease's time constant
 
 pub struct Tick {
@@ -96,12 +96,12 @@ mod imp {
                     continue;
                 }
                 let major = t.label.is_some();
-                let len = if major { 12.0 } else { 6.0 };
+                let len = if major { 14.0 } else { 7.0 };
                 let near = (x - cx).abs() < 2.0;
                 let colour = if near { accent(fade) } else { white(fade * if major { 0.42 } else { 0.2 }) };
                 snapshot.append_color(&colour, &graphene::Rect::new(x - 0.5, 4.0, 1.0, len));
                 if let Some(l) = &t.label {
-                    text(l, x, h - 9.0, 9.5, &white(fade * if near { 0.9 } else { 0.38 }));
+                    text(l, x, h - 11.0, 12.5, &white(fade * if near { 0.9 } else { 0.38 }));
                 }
             }
             // the pointer

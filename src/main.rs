@@ -101,21 +101,15 @@ button.flat-white { background: none; border: none; box-shadow: none; outline: n
     transition: background 140ms ease, color 140ms ease; }
 button.flat-white:active { background: rgba(255,255,255,0.10); }
 .key { background: #151517; border: 1px solid rgba(255,255,255,0.09); box-shadow: none; outline: none;
-    color: rgba(242,242,238,0.78); padding: 0; border-radius: 8px; min-width: 52px; min-height: 52px;
+    color: rgba(242,242,238,0.82); padding: 0; border-radius: 10px; min-width: 70px; min-height: 74px;
     font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
     transition: background 120ms ease, color 120ms ease, box-shadow 160ms ease; }
 .key:active { background: #232327; }
 .key.on { color: @accent; box-shadow: inset 0 3px 0 @accent; }
-.seg { background: #151517; border: 1px solid rgba(255,255,255,0.09); box-shadow: none; outline: none; padding: 0;
-    border-radius: 6px; min-height: 38px; min-width: 0;
-    color: rgba(242,242,238,0.7); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
-    font-size: 11px; font-weight: 700; letter-spacing: 1px;
-    transition: background 140ms ease, color 140ms ease; }
-.seg.on { background: @accent; border-color: @accent; color: #0b0b0c; }
 .zoom-pill { background: #121214; border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; padding: 3px; }
 .zoom-chip { background: none; border: none; box-shadow: none; outline: none; padding: 0; border-radius: 6px;
     color: rgba(242,242,238,0.75); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
-    font-size: 12px; font-weight: 700; min-width: 58px; min-height: 34px;
+    font-size: 16px; font-weight: 700; min-width: 70px; min-height: 42px;
     transition: background 140ms ease, color 140ms ease; }
 .zoom-chip.active { background: @accent; color: #0b0b0c; }
 .status { color: #f2f2ee; font-size: 15px; font-weight: 600; background: rgba(14,14,16,0.82);
@@ -125,7 +119,7 @@ button.flat-white:active { background: rgba(255,255,255,0.10); }
 .blackout { background: #000; }
 .burst-screen { background: #000; }
 .device-status label { color: rgba(242,242,238,0.75); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
-    font-size: 12px; font-weight: 600; }
+    font-size: 15px; font-weight: 600; }
 .battery-screen { background: #000; }
 .thermal-warning { color: #fff; font-size: 14px; font-weight: 700; background: rgba(200,40,40,0.85);
     border-radius: 14px; padding: 5px 16px; }
@@ -158,6 +152,17 @@ window.rot-cw .spin { transform: rotate(90deg); }
 window.rot-ccw .spin { transform: rotate(-90deg); }
 .fade { transition: opacity 180ms ease; }
 .fade.off { opacity: 0; }
+.picker { background: #141416; border: 1px solid alpha(@accent, 0.55); border-radius: 12px; padding: 6px; }
+.pick-row { background: none; border: none; box-shadow: none; outline: none; color: rgba(242,242,238,0.85);
+    border-radius: 8px; min-height: 54px; padding: 0 16px; font-size: 19px; font-weight: 600;
+    transition: background 140ms ease, color 140ms ease; }
+.pick-row:active { background: rgba(255,255,255,0.10); }
+.pick-row.on { background: @accent; color: #0b0b0c; }
+.bubble { background: #141416; border: 1px solid alpha(@accent, 0.55); border-radius: 12px; padding: 12px 16px; }
+.bubble-title { color: @accent; font-size: 17px; font-weight: 700; }
+.bubble-text { color: rgba(242,242,238,0.82); font-size: 15px; }
+.enc-wrap { transition: opacity 240ms ease, transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.enc-wrap.gone { opacity: 0; transform: translateY(32px); }
 ";
 
 #[derive(Clone, Copy, PartialEq)]
@@ -191,6 +196,12 @@ impl Mode {
 }
 
 // a photo's way from the shutter to the LRI (threads report on App::stage_tx)
+#[derive(Clone, Copy)]
+enum BubbleSide {
+    Left,
+    Right,
+}
+
 enum Stage {
     Captured(Result<PathBuf, String>), // the ASICs hold it (records in DIR)
     Transferred(Result<PathBuf, (PathBuf, String)>), // in DIR/asic*.raw (or DIR and what failed)
@@ -216,6 +227,9 @@ struct State {
     histogram: bool,
     assist: u8, // focus peaking (1) and zebras (2), as bits
     accent: usize, // ACCENTS' index
+    preset: usize, // PRESETS' index: what a double tap on the strip switches to
+    preset_prev: Option<PresetSnap>, // the settings before it did, while it is on
+    strip_tap_at: Option<Instant>, // the last tap on the strip's middle
     busy: bool,
     counting: bool,
     saving: u32,
@@ -294,7 +308,7 @@ impl State {
         let mode = self.mode.short();
         format!(
             "mode={mode}\niso={}\nshutter={}\nev={}\nflash={}\ntimer={}\ngrid={}\nhistogram={}\nassist={}\nburst={}\n\
-             wb={}\nmetering={}\ncaf={}\nstacked={}\nexposure_info={}\ninverse_wheel={}\nhaptics={}\ncontinuous={}\nstrip_zoom={}\ntoolbar={}\ntool_cycle={}\nlens_warn={}\ndevice_status={}\npocket={}\ngeotag={}\naccent={}\n",
+             wb={}\nmetering={}\ncaf={}\nstacked={}\nexposure_info={}\ninverse_wheel={}\nhaptics={}\ncontinuous={}\nstrip_zoom={}\ntoolbar={}\ntool_cycle={}\nlens_warn={}\ndevice_status={}\npocket={}\ngeotag={}\naccent={}\npreset={}\n",
             self.iso,
             self.shutter,
             self.ev,
@@ -320,6 +334,7 @@ impl State {
             self.pocket as u8,
             self.geotag as u8,
             self.accent,
+            self.preset,
         )
     }
 
@@ -356,6 +371,7 @@ impl State {
         self.device_status = flag("device_status", self.device_status);
         self.pocket = flag("pocket", self.pocket);
         self.geotag = flag("geotag", self.geotag);
+        self.preset = num("preset").map_or(self.preset, |v| (v as usize).min(PRESETS.len() - 1));
         self.accent = num("accent").map_or(self.accent, |v| (v as usize).min(ACCENTS.len() - 1));
     }
 }
@@ -399,6 +415,15 @@ const SETTINGS: &[SettingRow] = &[
             &["1/3 stop", "Continuous"],
             |s| s.continuous as usize,
             |s, v| s.continuous = v == 1,
+        ),
+    },
+    SettingRow {
+        title: "Double-tap preset",
+        sub: "A double tap on the touch strip (or the preset key) switches to it, and back",
+        kind: SettingKind::Choice(
+            &["Off", "Daylight", "Action", "Low light", "Portrait"],
+            |s| s.preset,
+            |s, v| s.preset = v,
         ),
     },
     SettingRow {
@@ -455,7 +480,7 @@ const SETTINGS: &[SettingRow] = &[
     },
 ];
 
-// what the toolbar can hold (the toolbar editor chooses which, and their order)
+// the keys of the grid (the mode key, which opens its picker, is apart)
 #[derive(Clone, Copy, PartialEq)]
 enum Tool {
     Flash,
@@ -466,10 +491,24 @@ enum Tool {
     Burst,
     Assist,
     Afd,
+    Meter,
+    Geo,
+    Preset,
 }
 
-const TOOLS: [Tool; 8] =
-    [Tool::Flash, Tool::Wb, Tool::Timer, Tool::Grid, Tool::Histogram, Tool::Assist, Tool::Burst, Tool::Afd];
+const TOOLS: [Tool; 11] = [
+    Tool::Flash,
+    Tool::Wb,
+    Tool::Timer,
+    Tool::Grid,
+    Tool::Histogram,
+    Tool::Assist,
+    Tool::Burst,
+    Tool::Afd,
+    Tool::Meter,
+    Tool::Geo,
+    Tool::Preset,
+];
 
 impl Tool {
     // in the settings file
@@ -483,6 +522,9 @@ impl Tool {
             Tool::Burst => "burst",
             Tool::Assist => "assist",
             Tool::Afd => "afd",
+            Tool::Meter => "meter",
+            Tool::Geo => "geo",
+            Tool::Preset => "preset",
         }
     }
 
@@ -495,7 +537,8 @@ impl Tool {
             Tool::Grid => Some(Opt::Grid),
             Tool::Burst => Some(Opt::Burst),
             Tool::Assist => Some(Opt::Assist),
-            Tool::Histogram | Tool::Afd => None,
+            Tool::Meter => Some(Opt::Meter),
+            Tool::Histogram | Tool::Afd | Tool::Geo | Tool::Preset => None,
         }
     }
 }
@@ -509,6 +552,7 @@ enum Opt {
     Grid,
     Burst,
     Assist,
+    Meter,
 }
 
 struct App {
@@ -606,12 +650,28 @@ struct App {
     moon_badge: gtk::Label,
     shake_badge: gtk::Label,
     preview_gain: Cell<f32>,
-    // the mode keys, in MODES' order
-    mode_btns: Vec<gtk::Button>,
+    // the mode key (its picker opens beside it), and the picker's rows in MODES' order
+    mode_btn: gtk::Button,
+    picker_turn: Rotator,
+    picker_card: gtk::Box,
+    picker_rows: Vec<gtk::Button>,
+    picker_timer: RefCell<Option<glib::SourceId>>,
+    // the bubble that explains a choice, and the encoders' turned wrappers (EV hides in manual)
+    bubble_turn: Rotator,
+    bubble_card: gtk::Box,
+    bubble_title: gtk::Label,
+    bubble_text: gtk::Label,
+    bubble_timer: RefCell<Option<glib::SourceId>>,
+    enc_turn: Vec<Rotator>,
+    meter_btn: gtk::Button,
+    geo_btn: gtk::Button,
+    preset_btn: gtk::Button,
     timer_btn: gtk::Button,
     grid_btn: gtk::Button,
     hist_btn: gtk::Button,
     hist: RefCell<Vec<u32>>,
+    // when each hint (a badge's description) was last shown, so one that flickers is said once
+    hint_at: RefCell<HashMap<&'static str, Instant>>,
     burst_btn: gtk::Button,
     flash_btn: gtk::Button,
     wb_btn: gtk::Button,
@@ -635,6 +695,35 @@ struct App {
     status: gtk::Label,
     countdown: gtk::Label,
 }
+
+// the double-tap presets: short caption, name, what it does
+const PRESETS: &[(&str, &str, &str)] = &[
+    ("OFF", "No preset", "Choose one in Settings: what a double tap on the touch strip switches to."),
+    ("DAY", "Daylight", "ISO priority at ISO 100, no compensation, no flash."),
+    ("ACT", "Action", "Shutter priority at 1/1000, burst of three."),
+    ("LOW", "Low light", "Auto with stacked capture and +1 EV."),
+    ("PORT", "Portrait", "Auto at 70 mm, no compensation."),
+];
+
+// what was set before a preset, to go back to
+#[derive(Clone, Copy)]
+struct PresetSnap {
+    mode: Mode,
+    iso: f64,
+    shutter: f64,
+    ev: f64,
+    flash: u8,
+    burst: usize,
+    stacked: bool,
+    zoom: f64,
+}
+
+const MODE_NAMES: [(&str, &str); 4] = [
+    ("Auto", "The camera chooses everything; you can still adjust EV."),
+    ("ISO priority", "You set the ISO; the camera picks the shutter."),
+    ("Shutter priority", "You set the shutter; the camera picks the ISO."),
+    ("Manual", "You set the ISO and the shutter."),
+];
 
 const ISO_MAX: f64 = 3200.0;
 const ISO_ANALOG_MAX: f64 = 775.0; // stock's analog ceiling: 7.75x
@@ -1013,9 +1102,13 @@ impl App {
         }
         self.view.set_assist(st.assist);
         icons::set_key(&self.afd_btn, icons::FOCUS_AUTO, if st.caf { "ON" } else { "OFF" });
-        for (i, b) in self.mode_btns.iter().enumerate() {
-            set_class(b, "on", i == st.mode.index());
-        }
+        icons::set_key(&self.mode_btn, icons::MODES[st.mode.index()], ["AUTO", "ISO", "TIME", "MAN"][st.mode.index()]);
+        icons::set_key(&self.meter_btn, icons::METER[st.metering as usize], ["CTR", "SPOT", "ALL"][st.metering as usize]);
+        icons::set_key(&self.geo_btn, if st.geotag { icons::GEO } else { icons::GEO_OFF }, if st.geotag { "ON" } else { "OFF" });
+        set_class(&self.geo_btn, "on", st.geotag);
+        icons::set_key(&self.preset_btn, icons::PRESET, PRESETS[st.preset].0);
+        set_class(&self.preset_btn, "on", st.preset_prev.is_some());
+        set_class(&self.enc_turn[2], "gone", st.mode == Mode::Manual);
         if st.caf {
             self.afd_btn.add_css_class("on");
         } else {
@@ -1178,6 +1271,14 @@ impl App {
                 BURSTS.iter().map(|&b| (icons::BURST, if b > 1 { b.to_string() } else { "off".into() })).collect(),
                 st.burst,
             ),
+            Opt::Meter => (
+                vec![
+                    (icons::METER[0], "centre".into()),
+                    (icons::METER[1], "touch".into()),
+                    (icons::METER[2], "whole".into()),
+                ],
+                st.metering as usize,
+            ),
             Opt::Assist => (
                 vec![
                     (icons::ASSIST_OFF, "off".into()),
@@ -1200,28 +1301,37 @@ impl App {
             Tool::Burst => &self.burst_btn,
             Tool::Assist => &self.assist_btn,
             Tool::Afd => &self.afd_btn,
+            Tool::Meter => &self.meter_btn,
+            Tool::Geo => &self.geo_btn,
+            Tool::Preset => &self.preset_btn,
         }
     }
 
-    // a key: the next of its choices, or a switch flipped
+    // a key: the next of its choices, or a switch flipped; a bubble says what it did
     fn tool_tap(self: &Rc<Self>, t: Tool) {
+        self.buzz(8);
         match t.opt() {
             Some(o) => {
                 let (choices, now) = self.choices(o);
                 self.choose(o, (now + 1) % choices.len());
             }
-            None => {
-                {
-                    let mut st = self.st.borrow_mut();
-                    match t {
-                        Tool::Histogram => st.histogram = !st.histogram,
-                        _ => st.caf = !st.caf,
+            None => match t {
+                Tool::Preset => return self.apply_preset(),
+                _ => {
+                    {
+                        let mut st = self.st.borrow_mut();
+                        match t {
+                            Tool::Histogram => st.histogram = !st.histogram,
+                            Tool::Geo => st.geotag = !st.geotag,
+                            _ => st.caf = !st.caf,
+                        }
                     }
+                    self.refresh();
                 }
-                self.refresh();
-            }
+            },
         }
-        self.buzz(8);
+        let (title, text) = self.tool_note(t);
+        self.show_bubble(&title, &text, self.tool_button(t).upcast_ref(), BubbleSide::Left, 3);
     }
 
     // after a setting changes: the driver's side of it, the screen, the settings file
@@ -1334,6 +1444,10 @@ impl App {
             Opt::Grid => self.st.borrow_mut().grid = k as u8,
             Opt::Burst => self.st.borrow_mut().burst = k,
             Opt::Assist => self.st.borrow_mut().assist = k as u8,
+            Opt::Meter => {
+                self.st.borrow_mut().metering = k as u8;
+                let _ = self.ctl_tx.send((ccb::METERING, k as i32));
+            }
         }
         self.refresh();
     }
@@ -2199,7 +2313,7 @@ impl App {
         if still != self.st.borrow().tripod {
             self.st.borrow_mut().tripod = still;
             let _ = self.ctl_tx.send((ccb::TRIPOD, still as i32));
-            self.tripod_badge.set_visible(still);
+            self.set_badge("tripod", &self.tripod_badge, still, "Tripod mode", "The camera is still, so automatic photos may use a longer exposure.");
         }
         // stock's in-pocket check (BasePreviewFragment): two or more lenses covered and under
         // 2 lux for 30 s: say so and close
@@ -2238,10 +2352,10 @@ impl App {
             let limit = if st.zoom >= 70.0 { 0.006_67 } else { 0.014_36 };
             secs > limit && !st.tripod
         };
-        self.shake_badge.set_visible(shake);
+        self.set_badge("shake", &self.shake_badge, shake, "Hold steady", "The shutter is slow enough that a shaky hand will blur the photo. Brace the camera, or use a tripod.");
         // the moon: a stacked capture ahead (only where stacking is on: auto, the setting)
         let stacking = self.st.borrow().stacked && self.st.borrow().mode == Mode::Auto;
-        self.moon_badge.set_visible(stacking && self.metered[3].load(Ordering::Relaxed) == 1);
+        self.set_badge("moon", &self.moon_badge, stacking && self.metered[3].load(Ordering::Relaxed) == 1, "Stacked photo ahead", "It is dark: several exposures will be taken and combined. Hold still.");
         let (show, asleep) = {
             let st = self.st.borrow();
             (st.histogram, st.asleep)
@@ -2482,10 +2596,8 @@ impl App {
                     st.strip_x = x;
                 } else {
                     self.st.borrow_mut().strip_x = x;
-                    let z = self.st.borrow().zoom;
                     // OpenLight: a full strip length zooms 2.3x
                     let raw = self.st.borrow().zoom_raw;
-                    let _ = z;
                     self.zoom_gesture(raw * 2.3f64.powf((x - last) as f64 / STRIP_LEN));
                 }
             }
@@ -2503,6 +2615,17 @@ impl App {
                     self.step_prime(false);
                 } else if tap && x0 > 700 {
                     self.step_prime(true);
+                } else if tap {
+                    // a double tap in the middle: the chosen preset (and back)
+                    let double = {
+                        let mut st = self.st.borrow_mut();
+                        let double = st.strip_tap_at.is_some_and(|t| t.elapsed() < Duration::from_millis(420));
+                        st.strip_tap_at = if double { None } else { Some(Instant::now()) };
+                        double
+                    };
+                    if double {
+                        self.apply_preset();
+                    }
                 }
             }
         }
@@ -2787,6 +2910,152 @@ impl App {
         set_class(&self.flyout_turn, "off", shown.is_none());
     }
 
+    // ---- the mode picker, the bubble, the preset
+
+    fn picker_open(&self) -> bool {
+        !self.picker_turn.has_css_class("off")
+    }
+
+    // the picker beside the mode key: to its left, over the preview
+    fn open_picker(self: &Rc<Self>) {
+        let cur = self.st.borrow().mode.index();
+        for (i, b) in self.picker_rows.iter().enumerate() {
+            set_class(b, "on", i == cur);
+        }
+        let Some(b) = self.mode_btn.compute_bounds(&self.root) else { return };
+        let (_, nat) = self.picker_card.preferred_size();
+        let (w, h) = if self.quarter.get() == 0 { (nat.width() as f32, nat.height() as f32) } else { (nat.height() as f32, nat.width() as f32) };
+        let max_y = (self.root.height() as f32 - h - 6.0).max(6.0);
+        self.picker_turn.set_margin_start((b.x() - w - 10.0).max(6.0) as i32);
+        self.picker_turn.set_margin_top(b.y().clamp(6.0, max_y) as i32);
+        set_class(&self.picker_turn, "off", false);
+        self.picker_turn.set_can_target(true);
+        let a = self.clone();
+        let id = glib::timeout_add_local_once(Duration::from_secs(6), move || {
+            *a.picker_timer.borrow_mut() = None;
+            a.close_picker();
+        });
+        if let Some(old) = self.picker_timer.borrow_mut().replace(id) {
+            old.remove();
+        }
+    }
+
+    fn close_picker(&self) {
+        set_class(&self.picker_turn, "off", true);
+        self.picker_turn.set_can_target(false);
+        if let Some(id) = self.picker_timer.borrow_mut().take() {
+            id.remove();
+        }
+    }
+
+    // a bubble with @title and @text beside @anchor (to its left or right), for @secs
+    fn show_bubble(self: &Rc<Self>, title: &str, text: &str, anchor: &gtk::Widget, side: BubbleSide, secs: u64) {
+        self.bubble_title.set_text(title);
+        self.bubble_text.set_text(text);
+        self.bubble_text.set_visible(!text.is_empty());
+        let Some(b) = anchor.compute_bounds(&self.root) else { return };
+        let (_, nat) = self.bubble_card.preferred_size();
+        let (w, h) = if self.quarter.get() == 0 { (nat.width() as f32, nat.height() as f32) } else { (nat.height() as f32, nat.width() as f32) };
+        let x = match side {
+            BubbleSide::Left => b.x() - w - 10.0,
+            BubbleSide::Right => b.x() + b.width() + 10.0,
+        };
+        let max_y = (self.root.height() as f32 - h - 6.0).max(6.0);
+        self.bubble_turn.set_margin_start(x.max(6.0) as i32);
+        self.bubble_turn.set_margin_top((b.y() + (b.height() - h) / 2.0).clamp(6.0, max_y) as i32);
+        set_class(&self.bubble_turn, "off", false);
+        let a = self.clone();
+        let id = glib::timeout_add_local_once(Duration::from_secs(secs), move || {
+            *a.bubble_timer.borrow_mut() = None;
+            set_class(&a.bubble_turn, "off", true);
+        });
+        if let Some(old) = self.bubble_timer.borrow_mut().replace(id) {
+            old.remove();
+        }
+    }
+
+    // a badge shown or hidden; when it appears, its description in a bubble (not again for 30 s)
+    fn set_badge(self: &Rc<Self>, key: &'static str, badge: &gtk::Label, on: bool, title: &str, text: &str) {
+        if on && !badge.is_visible() {
+            let fresh = self.hint_at.borrow().get(key).is_none_or(|t| t.elapsed() > Duration::from_secs(30));
+            if fresh {
+                self.hint_at.borrow_mut().insert(key, Instant::now());
+                self.show_bubble(title, text, badge.upcast_ref(), BubbleSide::Right, 4);
+            }
+        }
+        badge.set_visible(on);
+    }
+
+    // what the key says about its choice now
+    fn tool_note(&self, t: Tool) -> (String, String) {
+        let st = self.st.borrow();
+        let s = |a: &str, b: &str| (a.to_string(), b.to_string());
+        match t {
+            Tool::Flash => [s("Flash off", "It never fires."), s("Flash auto", "It fires when the scene is dark."), s("Flash on", "It fires on every photo.")][st.flash as usize].clone(),
+            Tool::Wb => {
+                let notes = ["Matches the light automatically.", "Warm indoor bulbs.", "Office tube lights.", "Sun, and flash.", "Overcast sky: a little warmer."];
+                (format!("White balance: {}", wb::PRESETS[st.wb]), notes[st.wb.min(4)].to_string())
+            }
+            Tool::Timer => {
+                let secs = TIMERS[st.timer];
+                if secs == 0 { s("Timer off", "The photo is taken at once.") } else { (format!("Timer {secs} s"), format!("The photo is taken {secs} seconds after the shutter.")) }
+            }
+            Tool::Grid => [s("Grid off", "No lines over the preview."), s("Grid 3 x 3", "Rule of thirds."), s("Grid golden", "The golden ratio, phi.")][st.grid as usize].clone(),
+            Tool::Histogram => if st.histogram { s("Histogram on", "The tones of the live image, with clipping marked red.") } else { s("Histogram off", "") },
+            Tool::Assist => [s("Assist off", "No overlay."), s("Focus peaking", "Green outlines show what is sharp."), s("Zebras", "Stripes mark highlights about to clip."), s("Peaking and zebras", "Green for sharp, stripes for clipping.")][st.assist as usize].clone(),
+            Tool::Burst => { let b = BURSTS[st.burst]; if b > 1 { (format!("Burst of {b}"), format!("{b} photos in a row from one press.")) } else { s("Burst off", "One photo a press.") } }
+            Tool::Afd => if st.caf { s("Continuous focus on", "It refocuses when the scene changes.") } else { s("Continuous focus off", "It focuses when you tap.") },
+            Tool::Meter => [s("Centre-weighted", "It meters the middle of the frame."), s("Touch metering", "It meters where you tap."), s("Whole frame", "It meters the whole frame.")][st.metering as usize].clone(),
+            Tool::Geo => if st.geotag { s("Geotag on", "Photos record where they were taken.") } else { s("Geotag off", "Photos carry no location.") },
+            Tool::Preset => { let (_, name, text) = PRESETS[st.preset]; s(name, text) }
+        }
+    }
+
+    // the double-tap preset on (the settings before it kept), or off again
+    fn apply_preset(self: &Rc<Self>) {
+        let idx = self.st.borrow().preset;
+        if idx == 0 {
+            let (_, name, text) = PRESETS[0];
+            self.show_bubble(name, text, self.preset_btn.upcast_ref(), BubbleSide::Left, 4);
+            return;
+        }
+        let back = self.st.borrow_mut().preset_prev.take();
+        let zoom = match back {
+            Some(b) => {
+                let mut st = self.st.borrow_mut();
+                (st.mode, st.iso, st.shutter, st.ev, st.flash, st.burst, st.stacked) = (b.mode, b.iso, b.shutter, b.ev, b.flash, b.burst, b.stacked);
+                b.zoom
+            }
+            None => {
+                let mut st = self.st.borrow_mut();
+                st.preset_prev = Some(PresetSnap {
+                    mode: st.mode, iso: st.iso, shutter: st.shutter, ev: st.ev, flash: st.flash,
+                    burst: st.burst, stacked: st.stacked, zoom: st.zoom,
+                });
+                st.flash = 0;
+                st.ev = ev_pos(0);
+                let mut zoom = st.zoom;
+                match idx {
+                    1 => { st.mode = Mode::Iso; st.iso = iso_pos(ISO_MIN); }
+                    2 => { st.mode = Mode::Shutter; st.shutter = secs_pos(1.0 / 1000.0); st.burst = 1; }
+                    3 => { st.mode = Mode::Auto; st.stacked = true; st.ev = ev_pos(3); }
+                    _ => { st.mode = Mode::Auto; zoom = 70.0; }
+                }
+                zoom
+            }
+        };
+        self.set_zoom(zoom);
+        let (flash, meter) = { let st = self.st.borrow(); (st.flash, st.metering) };
+        let _ = self.ctl_tx.send((ccb::FLASH, flash as i32));
+        let _ = self.ctl_tx.send((ccb::METERING, meter as i32));
+        self.apply_exposure();
+        self.refresh();
+        let on = self.st.borrow().preset_prev.is_some();
+        let (_, name, text) = PRESETS[idx];
+        let (title, text) = if on { (name.to_string(), text.to_string()) } else { ("Back to your settings".to_string(), format!("{name} is off.")) };
+        self.show_bubble(&title, &text, self.preset_btn.upcast_ref(), BubbleSide::Left, 4);
+    }
+
     fn dial_active(&self, dial: Dial) -> bool {
         let mode = self.st.borrow().mode;
         match dial {
@@ -2870,7 +3139,7 @@ impl App {
         }
         cr.select_font_face("Adwaita Mono", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
         cr.set_source_rgba(on.0, on.1, on.2, if active { 1.0 } else { 0.7 });
-        text_at(cr, name, cx, cy, 12.0);
+        text_at(cr, name, cx, cy, if name.len() > 4 { 12.5 } else { 15.0 });
         let anim = &self.enc_anim[dial_index(dial)];
         let shown = if anim.text().is_empty() { text } else { anim.text() };
         let pitch = dots::fit(&shown, w - 24.0, 3.6);
@@ -2881,7 +3150,7 @@ impl App {
     fn draw_flyout(&self, cr: &cairo::Context, w: f64, h: f64) {
         cr.select_font_face("Adwaita Mono", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
         cr.set_source_rgba(1.0, 1.0, 1.0, 0.5);
-        text(cr, self.flyout_unit.get(), 18.0, 20.0, 11.0, 0.0);
+        text(cr, self.flyout_unit.get(), 18.0, 20.0, 14.0, 0.0);
         let value = self.flyout_anim.text();
         let pitch = dots::fit(&value, w - 44.0, 5.4);
         let top = 28.0 + (h - 28.0 - 7.0 * pitch) / 2.0 - 2.0;
@@ -3175,8 +3444,10 @@ fn build(gapp: &gtk::Application) {
     left.set_margin_start(10);
     left.set_margin_end(8);
     left.set_margin_top(36);
-    for c in &encoders {
-        left.append(&turn(c.upcast_ref()));
+    let enc_turn: Vec<Rotator> = encoders.iter().map(|c| turn(c.upcast_ref())).collect();
+    for t in &enc_turn {
+        t.add_css_class("enc-wrap");
+        left.append(t);
     }
 
     // right: last photo, the dials around the shutter, the toolbar opener
@@ -3227,10 +3498,11 @@ fn build(gapp: &gtk::Application) {
     shutter.add_css_class("spin");
     // right: settings and close, the mode keys, the grid of keys, the last photo and the shutter
     let key_grid = gtk::Grid::new();
-    key_grid.set_row_spacing(6);
-    key_grid.set_column_spacing(6);
+    key_grid.set_row_spacing(8);
+    key_grid.set_column_spacing(8);
     key_grid.set_row_homogeneous(true);
     key_grid.set_column_homogeneous(true);
+    let mode_btn = icons::button(icons::MODES[0], "");
     let timer_btn = icons::button(icons::TIMER_OFF, "");
     let grid_btn = icons::button(icons::GRID_OFF, "");
     let hist_btn = icons::button(icons::HISTOGRAM, "");
@@ -3239,10 +3511,19 @@ fn build(gapp: &gtk::Application) {
     let wb_btn = icons::button(icons::WB[0], "");
     let afd_btn = icons::button(icons::FOCUS_AUTO, "");
     let assist_btn = icons::button(icons::ASSIST_OFF, "");
-    for (k, b) in [&flash_btn, &wb_btn, &timer_btn, &grid_btn, &hist_btn, &assist_btn, &burst_btn, &afd_btn].into_iter().enumerate() {
+    let meter_btn = icons::button(icons::METER[0], "");
+    let geo_btn = icons::button(icons::GEO_OFF, "");
+    let preset_btn = icons::button(icons::PRESET, "");
+    for (k, b) in [
+        &mode_btn, &flash_btn, &wb_btn, &timer_btn, &grid_btn, &hist_btn, &assist_btn, &burst_btn, &afd_btn, &meter_btn,
+        &geo_btn, &preset_btn,
+    ]
+    .into_iter()
+    .enumerate()
+    {
         b.add_css_class("key");
         b.add_css_class("spin");
-        key_grid.attach(b, (k % 4) as i32, (k / 4) as i32, 1, 1);
+        key_grid.attach(b, (k % 3) as i32, (k / 3) as i32, 1, 1);
     }
     let settings_btn = icons::button(icons::COG, "");
     let close_btn = icons::button(icons::CLOSE, "");
@@ -3256,22 +3537,52 @@ fn build(gapp: &gtk::Application) {
     top_row.append(&top_fill);
     top_row.append(&settings_btn);
     top_row.append(&close_btn);
-    let mode_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    mode_row.set_homogeneous(true);
-    let mode_btns: Vec<gtk::Button> = ["AUTO", "ISO", "TIME", "MAN"]
+    // the mode picker: a card of rows, each the mode's icon and full name
+    let picker_card = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    picker_card.add_css_class("picker");
+    let picker_rows: Vec<gtk::Button> = MODE_NAMES
         .iter()
-        .map(|name| {
+        .enumerate()
+        .map(|(i, (name, _))| {
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+            line.append(&icons::label(icons::MODES[i]));
             let l = gtk::Label::new(Some(name));
-            l.add_css_class("spin");
+            l.set_xalign(0.0);
+            line.append(&l);
             let b = gtk::Button::new();
-            b.set_child(Some(&l));
-            b.add_css_class("seg");
-            mode_row.append(&b);
+            b.set_child(Some(&line));
+            b.add_css_class("pick-row");
+            picker_card.append(&b);
             b
         })
         .collect();
+    let picker_turn = turn(picker_card.upcast_ref());
+    picker_turn.set_halign(gtk::Align::Start);
+    picker_turn.set_valign(gtk::Align::Start);
+    picker_turn.add_css_class("fade");
+    picker_turn.add_css_class("off");
+    picker_turn.set_can_target(false);
+    // the bubble: what a choice does, beside the key (or the icon) it came from
+    let bubble_title = gtk::Label::new(None);
+    bubble_title.add_css_class("bubble-title");
+    bubble_title.set_xalign(0.0);
+    let bubble_text = gtk::Label::new(None);
+    bubble_text.add_css_class("bubble-text");
+    bubble_text.set_xalign(0.0);
+    bubble_text.set_wrap(true);
+    bubble_text.set_max_width_chars(30);
+    let bubble_card = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    bubble_card.add_css_class("bubble");
+    bubble_card.append(&bubble_title);
+    bubble_card.append(&bubble_text);
+    let bubble_turn = turn(bubble_card.upcast_ref());
+    bubble_turn.set_halign(gtk::Align::Start);
+    bubble_turn.set_valign(gtk::Align::Start);
+    bubble_turn.add_css_class("fade");
+    bubble_turn.add_css_class("off");
+    bubble_turn.set_can_target(false);
     let right = gtk::Box::new(gtk::Orientation::Vertical, 10);
-    right.set_size_request(236, -1);
+    right.set_size_request(244, -1);
     right.set_margin_end(10);
     right.set_margin_top(6);
     right.set_margin_bottom(10);
@@ -3289,7 +3600,6 @@ fn build(gapp: &gtk::Application) {
     shutter_row.append(&shutter_fill);
     shutter_row.append(&shutter);
     right.append(&top_row);
-    right.append(&mode_row);
     right.append(&key_grid);
     right.append(&spacer());
     right.append(&shutter_row);
@@ -3297,6 +3607,7 @@ fn build(gapp: &gtk::Application) {
     // the preview with the lens strip under it
     let centre = gtk::Box::new(gtk::Orientation::Vertical, 8);
     centre.set_hexpand(true);
+    centre.set_margin_end(12);
     frame.set_vexpand(true);
     centre.append(&frame);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -3502,6 +3813,8 @@ fn build(gapp: &gtk::Application) {
     root.add_overlay(&countdown);
     root.add_overlay(&burst_screen);
     root.add_overlay(&flyout_turn);
+    root.add_overlay(&picker_turn);
+    root.add_overlay(&bubble_turn);
     root.add_overlay(&battery_screen);
     root.add_overlay(&hot_screen);
     root.add_overlay(&settings_page);
@@ -3554,6 +3867,9 @@ fn build(gapp: &gtk::Application) {
             histogram: false,
             assist: 0,
             accent: 0,
+            preset: 0,
+            preset_prev: None,
+            strip_tap_at: None,
             busy: false,
             counting: false,
             saving: 0,
@@ -3682,7 +3998,21 @@ fn build(gapp: &gtk::Application) {
         moon_badge,
         shake_badge,
         preview_gain: Cell::new(1.0),
-        mode_btns,
+        mode_btn,
+        picker_turn,
+        picker_card,
+        picker_rows,
+        picker_timer: RefCell::new(None),
+        bubble_turn,
+        bubble_card,
+        bubble_title,
+        bubble_text,
+        bubble_timer: RefCell::new(None),
+        enc_turn,
+        hint_at: RefCell::new(HashMap::new()),
+        meter_btn,
+        geo_btn,
+        preset_btn,
         timer_btn,
         grid_btn,
         hist_btn,
@@ -3772,6 +4102,10 @@ fn build(gapp: &gtk::Application) {
         if a.st.borrow().dragged {
             return;
         }
+        if a.picker_open() {
+            a.close_picker();
+            return;
+        }
         a.focus(Some((x, y)));
     });
     app.view.add_controller(click);
@@ -3827,12 +4161,24 @@ fn build(gapp: &gtk::Application) {
     click.connect_released(move |_, _, _, _| a.shutter_pressed());
     app.shutter.add_controller(click);
 
-    // the mode keys, and the close key (the app closes as the window does)
-    for (b, mode) in app.mode_btns.iter().zip(MODES) {
+    // the mode key opens its picker; a row sets the mode. The close key closes the app as the
+    // window does
+    let a = app.clone();
+    app.mode_btn.connect_clicked(move |_| {
+        if a.picker_open() {
+            a.close_picker();
+        } else {
+            a.open_picker();
+        }
+    });
+    for (b, mode) in app.picker_rows.iter().zip(MODES) {
         let a = app.clone();
         b.connect_clicked(move |_| {
             a.buzz(8);
             a.set_mode(mode);
+            a.close_picker();
+            let (name, text) = MODE_NAMES[mode.index()];
+            a.show_bubble(name, text, a.mode_btn.upcast_ref(), BubbleSide::Left, 3);
         });
     }
     let w = window.clone();
@@ -4077,6 +4423,12 @@ fn build(gapp: &gtk::Application) {
                     }
                     "zoom" => a.set_zoom(70.0),
                     "portrait" => a.apply_quarter(1),
+                    "picker" => a.open_picker(),
+                    "bubble" => {
+                        let (t, x) = a.tool_note(Tool::Assist);
+                        a.show_bubble(&t, &x, a.assist_btn.upcast_ref(), BubbleSide::Left, 600);
+                    }
+                    "hint" => a.show_bubble("Hold steady", "The shutter is slow enough that a shaky hand will blur the photo. Brace the camera, or use a tripod.", a.encoders[0].upcast_ref(), BubbleSide::Right, 600),
                     "zoombar" => {
                         a.set_zoom(50.0);
                         a.st.borrow_mut().zoom_wheel_until = Some(Instant::now() + Duration::from_secs(60));
