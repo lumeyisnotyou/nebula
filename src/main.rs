@@ -116,6 +116,8 @@ const STOW_W: f64 = 104.0;
 const RESERVE_FULL: f64 = RIGHT_W + 10.0 + 12.0;
 const RESERVE_STOW: f64 = STOW_W + 10.0 + 8.0;
 const LENS_ROOM: f64 = 70.0;
+// the room the overheating warning takes under the lens strip while it shows
+const THERMAL_ROOM: f64 = 40.0;
 // the flyout beside an encoder
 const FLYOUT: (i32, i32) = (280, 84 + ruler::HEIGHT);
 const HIST_BINS: usize = 64;
@@ -142,8 +144,6 @@ button.flat-white:active { background: rgba(255,255,255,0.10); }
     font-size: 16px; font-weight: 700; min-width: 70px; min-height: 42px;
     transition: background 140ms ease, color 140ms ease; }
 .zoom-chip.active { background: @accent; color: #0b0b0c; }
-.status { color: #f2f2ee; font-size: 15px; font-weight: 600; background: rgba(14,14,16,0.82);
-    border: 1px solid rgba(255,255,255,0.10); border-radius: 8px; padding: 5px 16px; }
 .countdown { color: #f2f2ee; font-size: 110px; font-weight: 700; }
 .thumb { border: 1px solid rgba(255,255,255,0.55); border-radius: 10px; }
 .blackout { background: #000; }
@@ -198,6 +198,9 @@ window.rot-ccw .spin { transform: rotate(-90deg); }
 .system { background: #141416; border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; padding: 4px; }
 .sys { transition: opacity 220ms ease, transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .sys.sys-hidden { opacity: 0; transform: translateX(-40px); }
+.pill { background: #141416; border: 1px solid alpha(@accent, 0.55); border-radius: 999px; padding: 6px 18px;
+    color: #f2f2ee; font-size: 16px; font-weight: 600; }
+.alert-icon { color: @accent; }
 ";
 
 #[derive(Clone, Copy, PartialEq)]
@@ -638,7 +641,6 @@ struct App {
     moved: Arc<AtomicBool>,
     // the proximity sensors covered (a bit each, prox's thread), and stock's warning
     blocked: Arc<AtomicU8>,
-    lens_badge: gtk::DrawingArea,
     // stock's device status (top left) and its battery-low screen
     status_box: gtk::Box,
     // iio-sensor-proxy, for the ambient light (claimed while the app runs)
@@ -649,7 +651,20 @@ struct App {
     quarter: Cell<i32>,
     // the status line, at the preview's top edge as the camera is held (place_status), and
     // the overheating warning at its bottom edge
-    status_turn: Rotator,
+    // the notices at the top of the screen: a small pill (icon and title) and an alert (icon, title
+    // and a line) under it
+    pill_turn: Rotator,
+    pill_label: gtk::Label,
+    pill_timer: RefCell<Option<glib::SourceId>>,
+    alert_turn: Rotator,
+    alert_icon: gtk::Label,
+    alert_title: gtk::Label,
+    alert_text: gtk::Label,
+    alert_timer: RefCell<Option<glib::SourceId>>,
+    alert_key: Cell<&'static str>,
+    zoom_pill: gtk::Box,
+    thermal_t: Cell<f64>,
+    thermal_anim: RefCell<Option<gtk::TickCallbackId>>,
     thermal_turn: Rotator,
     // the lens strip (the primes as keys, the zoom on the nearest) under the preview
     zoom_chips: Vec<gtk::Button>,
@@ -662,7 +677,6 @@ struct App {
     storage_label: gtk::Label,
     battery_label: gtk::Label,
     battery_screen: gtk::Box,
-    thermal_warning: gtk::Label,
     hot_screen: gtk::Box,
     transfers: RefCell<Option<transfer::Transfers>>,
     // the transfers wait for the preview's first frame (start_transfers_on_frame)
@@ -739,11 +753,6 @@ struct App {
     picker_rows: Vec<gtk::Button>,
     picker_timer: RefCell<Option<glib::SourceId>>,
     // the bubble that explains a choice, and the encoders' turned wrappers (EV hides in manual)
-    bubble_turn: Rotator,
-    bubble_card: gtk::Box,
-    bubble_title: gtk::Label,
-    bubble_text: gtk::Label,
-    bubble_timer: RefCell<Option<glib::SourceId>>,
     enc_turn: Vec<Rotator>,
     meter_btn: gtk::Button,
     geo_btn: gtk::Button,
@@ -754,8 +763,6 @@ struct App {
     hist: RefCell<Vec<u32>>,
     // when each hint (a badge's description) was last shown, so one that flickers is said once
     hint_at: RefCell<HashMap<&'static str, Instant>>,
-    // a hint that came while the adjust panel was up, to say once it has gone
-    hint_pending: RefCell<Option<(String, String)>>,
     burst_btn: gtk::Button,
     flash_btn: gtk::Button,
     wb_btn: gtk::Button,
@@ -776,7 +783,6 @@ struct App {
     last_saved: RefCell<String>,
     // logind's sleep inhibitor while photos are on their way (dropped: released)
     sleep_inhibitor: RefCell<Option<std::os::fd::OwnedFd>>,
-    status: gtk::Label,
     countdown: gtk::Label,
 }
 
@@ -926,17 +932,6 @@ fn place_on_edge(r: &Rotator, q: i32, top: bool, margin: i32) {
     r.set_margin_end(if q != 0 && side == 1 { margin } else { 0 });
 }
 
-// text() turned @q quarters clockwise for portrait, on the same side of (x, y)
-fn text_q(cr: &cairo::Context, s: &str, x: f64, y: f64, size: f64, align: f64, q: i32) {
-    if q == 0 {
-        return text(cr, s, x, y, size, align);
-    }
-    cr.save().ok();
-    cr.translate(x - (align - 0.5) * size * 1.2, y);
-    cr.rotate(q as f64 * PI / 2.0);
-    text(cr, s, 0.0, 0.0, size, 0.5);
-    cr.restore().ok();
-}
 
 // what an encoder shows: its name, the value, where that sits in its range (0 low, 1 high: a
 // greater position is a lower value), and whether the mode has it in hand
@@ -1242,18 +1237,118 @@ impl App {
         }
     }
 
+    // the old way of saying something: a failure or a warning is an alert, the rest a pill
     fn show_status(self: &Rc<Self>, msg: &str, secs: u64) {
-        self.status.set_text(msg);
-        self.status.set_visible(true);
-        if secs > 0 {
-            let app = self.clone();
-            let msg = msg.to_string();
-            glib::timeout_add_local_once(Duration::from_secs(secs), move || {
-                if app.status.text() == msg.as_str() {
-                    app.status.set_visible(false);
-                }
-            });
+        let warn = ["failed", "less than 1 GB", "no photo transfers", "no light-ccb", "pocket", "needs more room"]
+            .iter()
+            .any(|w| msg.contains(w));
+        if warn {
+            let icon = if msg.contains("pocket") { icons::MOON } else { icons::INFO };
+            self.show_alert("status", icon, msg, "", secs.max(3));
+        } else {
+            self.show_pill(icons::STORAGE, msg, secs.max(2));
         }
+    }
+
+    // a small pill at the top: @icon and @title, for @secs
+    fn show_pill(self: &Rc<Self>, icon: char, title: &str, secs: u64) {
+        self.pill_label.set_markup(&icons::markup(icon, title));
+        set_class(&self.pill_turn, "off", false);
+        self.place_alert();
+        let a = self.clone();
+        let id = glib::timeout_add_local_once(Duration::from_secs(secs), move || {
+            *a.pill_timer.borrow_mut() = None;
+            set_class(&a.pill_turn, "off", true);
+            a.place_alert();
+        });
+        if let Some(old) = self.pill_timer.borrow_mut().replace(id) {
+            old.remove();
+        }
+    }
+
+    // an alert at the top, under the pill: @icon, @title and a line; for @secs, or until cleared
+    // (@secs 0). @key says what it is, so only that can clear it
+    fn show_alert(self: &Rc<Self>, key: &'static str, icon: char, title: &str, text: &str, secs: u64) {
+        self.alert_icon.set_markup(&format!("<span font_family=\"{}\" size=\"220%\">{icon}</span>", icons::FAMILY));
+        self.alert_title.set_text(title);
+        self.alert_text.set_text(text);
+        self.alert_text.set_visible(!text.is_empty());
+        self.alert_key.set(key);
+        set_class(&self.alert_turn, "off", false);
+        self.place_alert();
+        if let Some(old) = self.alert_timer.borrow_mut().take() {
+            old.remove();
+        }
+        if secs > 0 {
+            let a = self.clone();
+            let id = glib::timeout_add_local_once(Duration::from_secs(secs), move || {
+                *a.alert_timer.borrow_mut() = None;
+                a.alert_key.set("");
+                set_class(&a.alert_turn, "off", true);
+            });
+            *self.alert_timer.borrow_mut() = Some(id);
+        }
+    }
+
+    // the alert away, if it is the @key one
+    fn clear_alert(&self, key: &str) {
+        if self.alert_key.get() != key {
+            return;
+        }
+        self.alert_key.set("");
+        set_class(&self.alert_turn, "off", true);
+        if let Some(old) = self.alert_timer.borrow_mut().take() {
+            old.remove();
+        }
+    }
+
+    // the alert under the pill, or at the top without one
+    fn place_alert(&self) {
+        let pill = !self.pill_turn.has_css_class("off");
+        place_on_edge(&self.alert_turn, self.quarter.get(), true, if pill { 64 } else { 10 });
+    }
+
+    // the key's icon now (for its pill)
+    fn tool_icon(&self, t: Tool) -> char {
+        let st = self.st.borrow();
+        match t {
+            Tool::Flash => [icons::FLASH_OFF, icons::FLASH_AUTO, icons::FLASH][st.flash as usize],
+            Tool::Wb => icons::WB[st.wb.min(4)],
+            Tool::Timer => if TIMERS[st.timer] == 0 { icons::TIMER_OFF } else { icons::TIMER },
+            Tool::Grid => if st.grid == 0 { icons::GRID_OFF } else { icons::GRID },
+            Tool::Histogram => icons::HISTOGRAM,
+            Tool::Assist => if st.assist == 0 { icons::ASSIST_OFF } else { icons::ASSIST },
+            Tool::Burst => icons::BURST,
+            Tool::Afd => icons::FOCUS_AUTO,
+            Tool::Meter => icons::METER[st.metering as usize],
+            Tool::Geo => if st.geotag { icons::GEO } else { icons::GEO_OFF },
+            Tool::Strip => icons::STRIP,
+        }
+    }
+
+    // the room under the lens strip for the overheating warning, eased in and out
+    fn animate_thermal(self: &Rc<Self>, to: f64) {
+        if let Some(id) = self.thermal_anim.borrow_mut().take() {
+            id.remove();
+        }
+        let a = self.clone();
+        let last = Cell::new(0i64);
+        let id = self.right.add_tick_callback(move |_, clock| {
+            let now = clock.frame_time();
+            let before = last.replace(now);
+            let dt = if before == 0 { 0.016 } else { ((now - before) as f64 / 1e6).clamp(0.001, 0.05) };
+            let cur = a.thermal_t.get();
+            let step = dt / 0.3;
+            let next = if to > cur { (cur + step).min(to) } else { (cur - step).max(to) };
+            a.thermal_t.set(next);
+            a.apply_deck();
+            if next == to {
+                a.thermal_anim.replace(None);
+                return glib::ControlFlow::Break;
+            }
+            glib::ControlFlow::Continue
+        });
+        *self.thermal_anim.borrow_mut() = Some(id);
     }
 
     fn set_dial(&self, dial: Dial, pos: f64) {
@@ -1403,8 +1498,8 @@ impl App {
                 }
             },
         }
-        let (title, text) = self.tool_note(t);
-        self.show_bubble(&title, &text, 3);
+        let (title, _) = self.tool_note(t);
+        self.show_pill(self.tool_icon(t), &title, 2);
     }
 
     // after a setting changes: the driver's side of it, the screen, the settings file
@@ -1554,15 +1649,14 @@ impl App {
             r.set_quarter(q);
         }
         self.place_status(q);
-        self.lens_badge.queue_draw();
     }
 
     // the status line along the preview's top edge as the camera is held: the top, or the
     // left with the shutter down (turned -90), the right with it up; the overheating
     // warning along the opposite edge, so neither covers the middle of the frame
     fn place_status(&self, q: i32) {
-        place_on_edge(&self.status_turn, q, true, 14);
-        place_on_edge(&self.thermal_turn, q, false, 70);
+        place_on_edge(&self.pill_turn, q, true, 10);
+        self.place_alert();
     }
 
     // the driver restarts the ASICs' preview on the new module; the stream carries on
@@ -2352,20 +2446,24 @@ impl App {
             st.thermal = level;
             st.thermal_pause_until = pause;
         }
-        self.thermal_warning.set_visible(level == 1);
+        set_class(&self.thermal_turn, "off", level != 1);
+        self.animate_thermal(if level == 1 { 1.0 } else { 0.0 });
         self.hot_screen.set_visible(level == 2);
         self.follow_screen();
     }
 
     // a lens covered: stock's warning and its buzz (every pass of the fast loop)
-    fn lens_check(&self) {
+    fn lens_check(self: &Rc<Self>) {
         let mask = self.blocked.load(Ordering::Relaxed);
         let (shown, warn) = (self.st.borrow().lens_mask, self.st.borrow().lens_warning);
         let mask = if warn > 0 { mask } else { 0 };
         if mask != shown {
             self.st.borrow_mut().lens_mask = mask;
-            self.lens_badge.set_visible(mask != 0);
-            self.lens_badge.queue_draw();
+            if mask != 0 {
+                self.show_alert("lens", icons::CAMERA, "Lens blocked", "Something is over a lens: move it away to see the whole frame.", 0);
+            } else {
+                self.clear_alert("lens");
+            }
             if shown == 0 && warn == 2 {
                 self.buzz(30);
             }
@@ -2373,12 +2471,6 @@ impl App {
     }
 
     fn poll(self: &Rc<Self>) {
-        if self.flyout_turn.has_css_class("off") {
-            let pending = self.hint_pending.borrow_mut().take();
-            if let Some((title, text)) = pending {
-                self.show_bubble(&title, &text, 4);
-            }
-        }
         let n = {
             let mut st = self.st.borrow_mut();
             st.polls = st.polls.wrapping_add(1);
@@ -2405,7 +2497,7 @@ impl App {
         if still != self.st.borrow().tripod {
             self.st.borrow_mut().tripod = still;
             let _ = self.ctl_tx.send((ccb::TRIPOD, still as i32));
-            self.set_badge("tripod", &self.tripod_badge, still, "Tripod mode", "The camera is still, so automatic photos may use a longer exposure.");
+            self.set_badge("tripod", &self.tripod_badge, still, icons::CAMERA_LOCK, "Tripod mode", "The camera is still, so automatic photos may use a longer exposure.");
         }
         // stock's in-pocket check (BasePreviewFragment): two or more lenses covered and under
         // 2 lux for 30 s: say so and close
@@ -2431,7 +2523,7 @@ impl App {
                 "l16-camera2: in a pocket (lenses covered {:#04b}, {lux:.1} lux, 30 s): blanking the screen",
                 self.blocked.load(Ordering::Relaxed)
             );
-            self.status.set_visible(false);
+            self.clear_alert("status");
             blank_screen();
         } else if held >= 20 {
             self.show_status(&format!("In a pocket? Sleeping in {} s", 30 - held), 2);
@@ -2444,10 +2536,10 @@ impl App {
             let limit = if st.zoom >= 70.0 { 0.006_67 } else { 0.014_36 };
             secs > limit && !st.tripod
         };
-        self.set_badge("shake", &self.shake_badge, shake, "Hold steady", "The shutter is slow enough that a shaky hand will blur the photo. Brace the camera, or use a tripod.");
+        self.set_badge("shake", &self.shake_badge, shake, icons::HAND_WAVE, "Hold steady", "The shutter is slow enough that a shaky hand will blur the photo. Brace the camera, or use a tripod.");
         // the moon: a stacked capture ahead (only where stacking is on: auto, the setting)
         let stacking = self.st.borrow().stacked && self.st.borrow().mode == Mode::Auto;
-        self.set_badge("moon", &self.moon_badge, stacking && self.metered[3].load(Ordering::Relaxed) == 1, "Stacked photo ahead", "It is dark: several exposures will be taken and combined. Hold still.");
+        self.set_badge("moon", &self.moon_badge, stacking && self.metered[3].load(Ordering::Relaxed) == 1, icons::MOON, "Stacked photo ahead", "It is dark: several exposures will be taken and combined. Hold still.");
         let (show, asleep) = {
             let st = self.st.borrow();
             (st.histogram, st.asleep)
@@ -2480,13 +2572,12 @@ impl App {
     }
 
     // the photo transfer streams, beside the preview (done: Stage::Transferred); started after it
-    fn start_transfers(&self) {
+    fn start_transfers(self: &Rc<Self>) {
         let (done_tx, done_rx) = mpsc::channel();
         match transfer::Transfers::start(done_tx) {
             Ok(t) => *self.transfers.borrow_mut() = Some(t),
             Err(e) => {
-                self.status.set_text(&format!("no photo transfers: {e}"));
-                self.status.set_visible(true);
+                self.show_status(&format!("no photo transfers: {e}"), 8);
             }
         }
         let tx = self.stage_tx.clone();
@@ -2905,72 +2996,6 @@ impl App {
         }
     }
 
-    // stock's lens-blocked warning (proximity_sensor_notification_layout): the camera's back
-    // as seen through the screen (its cut corner top right), a ringed dot at each covered
-    // sensor: ch0-2 down the left edge, ch3 top centre, ch4 bottom centre; "lens blocked"
-    // below it. The camera's back never turns (its dots are where the sensors are); in
-    // portrait only the words turn, and go below it as the camera is held
-    fn draw_lens_blocked(&self, cr: &cairo::Context, w: f64, h: f64) {
-        let mask = self.st.borrow().lens_mask;
-        let q = self.quarter.get();
-        let (bw, bh) = (160.0, 93.0);
-        // portrait: a column beside the body for the turned words (clear of the dots on
-        // the left edge, which stand 16 out)
-        let side = 40.0;
-        let (x0, y0) = match q {
-            0 => ((w - bw) / 2.0, 12.0),
-            -1 => ((w - bw - side) / 2.0, (h - bh) / 2.0),
-            _ => ((w - bw - side) / 2.0 + side, (h - bh) / 2.0),
-        };
-        cr.set_source_rgba(0.0, 0.0, 0.0, 0.55);
-        match q {
-            0 => rounded(cr, x0 - 12.0, 0.0, bw + 24.0, bh + 52.0, 12.0),
-            -1 => rounded(cr, x0 - 12.0, y0 - 12.0, bw + 24.0 + side, bh + 24.0, 12.0),
-            _ => rounded(cr, x0 - 12.0 - side, y0 - 12.0, bw + 24.0 + side, bh + 24.0, 12.0),
-        }
-        let _ = cr.fill();
-        // the body: rounded corners, the top right one cut
-        let (r, cut) = (6.0, 22.0);
-        cr.new_path();
-        cr.arc(x0 + r, y0 + r, r, PI, 1.5 * PI);
-        cr.line_to(x0 + bw - cut, y0);
-        cr.line_to(x0 + bw, y0 + cut * 0.55);
-        cr.arc(x0 + bw - r, y0 + bh - r, r, 0.0, 0.5 * PI);
-        cr.arc(x0 + r, y0 + bh - r, r, 0.5 * PI, PI);
-        cr.close_path();
-        cr.set_source_rgb(0.34, 0.34, 0.34);
-        let _ = cr.fill_preserve();
-        cr.set_source_rgb(0.95, 0.95, 0.95);
-        cr.set_line_width(3.0);
-        let _ = cr.stroke();
-        let at = [
-            (x0, y0 + 10.0),
-            (x0, y0 + bh / 2.0),
-            (x0, y0 + bh - 10.0),
-            (x0 + bw / 2.0, y0),
-            (x0 + bw / 2.0, y0 + bh),
-        ];
-        for (i, (x, y)) in at.iter().enumerate() {
-            if mask & (1 << i) == 0 {
-                continue;
-            }
-            for (rad, a) in [(16.0, 0.25), (11.0, 0.45)] {
-                cr.set_source_rgba(1.0, 1.0, 1.0, a);
-                cr.arc(*x, *y, rad, 0.0, 2.0 * PI);
-                let _ = cr.fill();
-            }
-            cr.set_source_rgb(1.0, 1.0, 1.0);
-            cr.arc(*x, *y, 6.0, 0.0, 2.0 * PI);
-            let _ = cr.fill();
-        }
-        cr.set_source_rgb(1.0, 1.0, 1.0);
-        match q {
-            0 => text(cr, "lens blocked", w / 2.0, y0 + bh + 24.0, 17.0, 0.5),
-            -1 => text_q(cr, "lens blocked", x0 + bw + side / 2.0, y0 + bh / 2.0, 17.0, 0.5, q),
-            _ => text_q(cr, "lens blocked", x0 - 16.0 - (side - 16.0) / 2.0, y0 + bh / 2.0, 17.0, 0.5, q),
-        }
-    }
-
     // stock's focus marks (CrossHair): grey corners while focusing; then yellow and a little
     // larger when focused, with a lock while the focus holds (no AF-D), or a shake when
     // not; dimmed after a second, gone after five
@@ -3091,38 +3116,13 @@ impl App {
         }
     }
 
-    // a bubble with @title and @text, centred over the preview, for @secs
-    fn show_bubble(self: &Rc<Self>, title: &str, text: &str, secs: u64) {
-        self.bubble_title.set_text(title);
-        self.bubble_text.set_text(text);
-        self.bubble_text.set_visible(!text.is_empty());
-        let Some(b) = self.view.compute_bounds(&self.root) else { return };
-        let (_, nat) = self.bubble_card.preferred_size();
-        let (w, h) = if self.quarter.get() == 0 { (nat.width() as f32, nat.height() as f32) } else { (nat.height() as f32, nat.width() as f32) };
-        self.bubble_turn.set_margin_start((b.x() + (b.width() - w) / 2.0).max(6.0) as i32);
-        self.bubble_turn.set_margin_top((b.y() + (b.height() - h) / 2.0).max(6.0) as i32);
-        set_class(&self.bubble_turn, "off", false);
-        let a = self.clone();
-        let id = glib::timeout_add_local_once(Duration::from_secs(secs), move || {
-            *a.bubble_timer.borrow_mut() = None;
-            set_class(&a.bubble_turn, "off", true);
-        });
-        if let Some(old) = self.bubble_timer.borrow_mut().replace(id) {
-            old.remove();
-        }
-    }
-
-    // a badge shown or hidden; when it appears, its description in a bubble (not again for 30 s)
-    fn set_badge(self: &Rc<Self>, key: &'static str, badge: &gtk::Label, on: bool, title: &str, text: &str) {
+    // a badge shown or hidden; when it appears, its description as an alert (not again for 30 s)
+    fn set_badge(self: &Rc<Self>, key: &'static str, badge: &gtk::Label, on: bool, icon: char, title: &str, text: &str) {
         if on && !badge.is_visible() {
             let fresh = self.hint_at.borrow().get(key).is_none_or(|t| t.elapsed() > Duration::from_secs(30));
             if fresh {
                 self.hint_at.borrow_mut().insert(key, Instant::now());
-                if self.flyout_turn.has_css_class("off") {
-                    self.show_bubble(title, text, 4);
-                } else {
-                    *self.hint_pending.borrow_mut() = Some((title.to_string(), text.to_string()));
-                }
+                self.show_alert(key, icon, title, text, 4);
             }
         }
         badge.set_visible(on);
@@ -3181,7 +3181,7 @@ impl App {
         self.st.borrow_mut().strip_fn = next;
         self.refresh();
         self.buzz(15);
-        self.show_bubble(&format!("Touch strip: {}", STRIP_FNS[next].1), "Slide along it to change this. Double tap it to switch.", 3);
+        self.show_pill(icons::STRIP, &format!("Touch strip: {}", STRIP_FNS[next].1), 2);
     }
 
     // ---- the controls swiped away, pinned keys, the system panel
@@ -3207,7 +3207,7 @@ impl App {
         self.buzz(10);
         if on {
             self.apply_stow();
-            self.show_bubble("Controls hidden", "Swipe left to bring them back. Hold a key to pin it, so it stays.", 4);
+            self.show_pill(icons::CHEVRON_RIGHT, "Controls hidden: swipe left to bring them back", 3);
             let a = self.clone();
             glib::timeout_add_local_once(Duration::from_millis(230), move || {
                 if a.stowed.get() {
@@ -3254,12 +3254,16 @@ impl App {
         self.thumb_box.set_visible(true);
     }
 
-    // the layout at @t: 0 the controls out, 1 stowed
-    fn apply_deck(&self, t: f64) {
+    // the layout now: the controls out or stowed (stow_t), and the overheating warning's room
+    fn apply_deck(&self) {
+        let t = self.stow_t.get();
+        let t = t * t * (3.0 - 2.0 * t);
         let lerp = |a: f64, b: f64| a + (b - a) * t;
+        let warm = THERMAL_ROOM * self.thermal_t.get();
         self.right.set_width_request(lerp(RIGHT_W, STOW_W) as i32);
         self.centre.set_margin_end(lerp(RESERVE_FULL, RESERVE_STOW) as i32);
-        self.frame.set_margin_bottom(lerp(LENS_ROOM, 0.0) as i32);
+        self.frame.set_margin_bottom((lerp(LENS_ROOM, 0.0) + warm) as i32);
+        self.zoom_pill.set_margin_bottom((10.0 + warm) as i32);
     }
 
     // there in about a quarter of a second, on a smooth curve
@@ -3277,7 +3281,7 @@ impl App {
             let step = dt / 0.26;
             let next = if to > cur { (cur + step).min(to) } else { (cur - step).max(to) };
             a.stow_t.set(next);
-            a.apply_deck(next * next * (3.0 - 2.0 * next));
+            a.apply_deck();
             if next == to {
                 a.stow_anim.replace(None);
                 return glib::ControlFlow::Break;
@@ -3300,9 +3304,9 @@ impl App {
         }
         self.refresh();
         if now {
-            self.show_bubble("Pinned", "It stays when you swipe the controls away.", 3);
+            self.show_pill(icons::LOCK, "Pinned: it stays when the controls hide", 2);
         } else {
-            self.show_bubble("Unpinned", "It hides with the other controls.", 3);
+            self.show_pill(icons::LOCK, "Unpinned", 2);
         }
     }
 
@@ -3888,25 +3892,6 @@ fn build(gapp: &gtk::Application) {
     picker_turn.add_css_class("fade");
     picker_turn.add_css_class("off");
     picker_turn.set_can_target(false);
-    // the bubble: what a choice does, beside the key (or the icon) it came from
-    let bubble_title = gtk::Label::new(None);
-    bubble_title.add_css_class("bubble-title");
-    bubble_title.set_xalign(0.0);
-    let bubble_text = gtk::Label::new(None);
-    bubble_text.add_css_class("bubble-text");
-    bubble_text.set_xalign(0.0);
-    bubble_text.set_wrap(true);
-    bubble_text.set_max_width_chars(30);
-    let bubble_card = gtk::Box::new(gtk::Orientation::Vertical, 3);
-    bubble_card.add_css_class("bubble");
-    bubble_card.append(&bubble_title);
-    bubble_card.append(&bubble_text);
-    let bubble_turn = turn(bubble_card.upcast_ref());
-    bubble_turn.set_halign(gtk::Align::Start);
-    bubble_turn.set_valign(gtk::Align::Start);
-    bubble_turn.add_css_class("fade");
-    bubble_turn.add_css_class("off");
-    bubble_turn.set_can_target(false);
     let right = gtk::Box::new(gtk::Orientation::Vertical, 10);
     right.set_size_request(RIGHT_W as i32, -1);
     right.set_halign(gtk::Align::End);
@@ -3989,14 +3974,40 @@ fn build(gapp: &gtk::Application) {
     chooser.append(&turn(chooser_card.upcast_ref()));
     chooser.set_visible(false);
     settings_page.add_overlay(&chooser);
-    let status = gtk::Label::new(None);
-    status.add_css_class("status");
-    status.set_valign(gtk::Align::Start);
-    status.set_halign(gtk::Align::Center);
-    status.set_margin_top(14);
-    status.set_visible(false);
-    status.set_can_target(false);
-    let status_turn = turn(status.upcast_ref());
+    // the notices at the top of the screen: a small pill, and under it an alert with a line of text
+    let pill_label = gtk::Label::new(None);
+    pill_label.add_css_class("pill");
+    pill_label.set_halign(gtk::Align::Center);
+    pill_label.set_valign(gtk::Align::Start);
+    pill_label.set_margin_top(10);
+    let pill_turn = turn(pill_label.upcast_ref());
+    pill_turn.set_can_target(false);
+    pill_turn.add_css_class("fade");
+    pill_turn.add_css_class("off");
+    let alert_icon = gtk::Label::new(None);
+    alert_icon.add_css_class("alert-icon");
+    let alert_title = gtk::Label::new(None);
+    alert_title.add_css_class("bubble-title");
+    alert_title.set_xalign(0.0);
+    let alert_text = gtk::Label::new(None);
+    alert_text.add_css_class("bubble-text");
+    alert_text.set_xalign(0.0);
+    alert_text.set_wrap(true);
+    alert_text.set_max_width_chars(34);
+    let alert_body = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    alert_body.append(&alert_title);
+    alert_body.append(&alert_text);
+    let alert_card = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+    alert_card.add_css_class("bubble");
+    alert_card.append(&alert_icon);
+    alert_card.append(&alert_body);
+    alert_card.set_halign(gtk::Align::Center);
+    alert_card.set_valign(gtk::Align::Start);
+    alert_card.set_margin_top(10);
+    let alert_turn = turn(alert_card.upcast_ref());
+    alert_turn.set_can_target(false);
+    alert_turn.add_css_class("fade");
+    alert_turn.add_css_class("off");
     let zoom_chips: Vec<gtk::Button> = PRIMES
         .iter()
         .map(|p| {
@@ -4073,14 +4084,6 @@ fn build(gapp: &gtk::Application) {
     left.prepend(&moon_badge);
 
     // stock's lens-blocked warning: the camera's back with the covered sensors, top centre
-    let lens_badge = gtk::DrawingArea::new();
-    lens_badge.set_size_request(230, 150);
-    // centred in the preview (the status line keeps to its top edge)
-    lens_badge.set_halign(gtk::Align::Center);
-    lens_badge.set_valign(gtk::Align::Center);
-    lens_badge.set_can_target(false);
-    lens_badge.set_visible(false);
-    // (not turned: draw_lens_blocked turns only its words)
 
     // stock's device status: captures left and the battery, top left
     let storage_label = gtk::Label::new(None);
@@ -4121,10 +4124,11 @@ fn build(gapp: &gtk::Application) {
     thermal_warning.add_css_class("thermal-warning");
     thermal_warning.set_halign(gtk::Align::Center);
     thermal_warning.set_valign(gtk::Align::End);
-    thermal_warning.set_margin_bottom(24);
-    thermal_warning.set_can_target(false);
-    thermal_warning.set_visible(false);
+    thermal_warning.set_margin_bottom(8);
     let thermal_turn = turn(thermal_warning.upcast_ref());
+    thermal_turn.set_can_target(false);
+    thermal_turn.add_css_class("fade");
+    thermal_turn.add_css_class("off");
     let hot_screen = gtk::Box::new(gtk::Orientation::Vertical, 16);
     hot_screen.add_css_class("battery-screen");
     let hot_icon = gtk::Label::new(None);
@@ -4142,17 +4146,16 @@ fn build(gapp: &gtk::Application) {
 
     let root = gtk::Overlay::new();
     root.set_child(Some(&deck));
-    preview.add_overlay(&lens_badge);
     // on the preview, at its bottom edge as the camera is held (place_status)
-    preview.add_overlay(&thermal_turn);
+    centre.add_overlay(&thermal_turn);
     root.add_overlay(&status_box_turn);
-    preview.add_overlay(&status_turn);
+    preview.add_overlay(&pill_turn);
+    preview.add_overlay(&alert_turn);
     root.add_overlay(&countdown);
     root.add_overlay(&burst_screen);
     root.add_overlay(&flyout_turn);
     root.add_overlay(&system_turn);
     root.add_overlay(&picker_turn);
-    root.add_overlay(&bubble_turn);
     root.add_overlay(&battery_screen);
     root.add_overlay(&hot_screen);
     root.add_overlay(&settings_page);
@@ -4285,12 +4288,22 @@ fn build(gapp: &gtk::Application) {
         still: still.clone(),
         moved: moved.clone(),
         blocked: blocked.clone(),
-        lens_badge,
         status_box,
         light: light_proxy(),
         accel: accel_proxy(),
         quarter: Cell::new(0),
-        status_turn: status_turn.clone(),
+        pill_turn: pill_turn.clone(),
+        pill_label: pill_label.clone(),
+        pill_timer: RefCell::new(None),
+        alert_turn: alert_turn.clone(),
+        alert_icon: alert_icon.clone(),
+        alert_title: alert_title.clone(),
+        alert_text: alert_text.clone(),
+        alert_timer: RefCell::new(None),
+        alert_key: Cell::new(""),
+        zoom_pill: zoom_pill.clone(),
+        thermal_t: Cell::new(0.0),
+        thermal_anim: RefCell::new(None),
         thermal_turn: thermal_turn.clone(),
         zoom_chips: zoom_chips.clone(),
         idle_cookie: Cell::new(0),
@@ -4300,7 +4313,6 @@ fn build(gapp: &gtk::Application) {
         storage_label,
         battery_label,
         battery_screen,
-        thermal_warning,
         hot_screen,
         transfers: RefCell::new(None),
         transfers_wait: RefCell::new(None),
@@ -4362,14 +4374,8 @@ fn build(gapp: &gtk::Application) {
         picker_card,
         picker_rows,
         picker_timer: RefCell::new(None),
-        bubble_turn,
-        bubble_card,
-        bubble_title,
-        bubble_text,
-        bubble_timer: RefCell::new(None),
         enc_turn,
         hint_at: RefCell::new(HashMap::new()),
-        hint_pending: RefCell::new(None),
         meter_btn,
         geo_btn,
         strip_btn,
@@ -4394,7 +4400,6 @@ fn build(gapp: &gtk::Application) {
         settings_page,
         last_saved: RefCell::new(String::new()),
         sleep_inhibitor: RefCell::new(None),
-        status,
         countdown,
     });
     // portrait: follow the accelerometer's orientation
@@ -4431,8 +4436,6 @@ fn build(gapp: &gtk::Application) {
             a.draw_focus(cr, &st, a.focus_centre.get());
         }
     });
-    let a = app.clone();
-    app.lens_badge.set_draw_func(move |_, cr, w, h| a.draw_lens_blocked(cr, w as f64, h as f64));
     let a = app.clone();
     app.shutter.set_draw_func(move |_, cr, w, h| a.draw_shutter(cr, w as f64, h as f64));
     for (c, dial) in app.encoders.iter().zip([Dial::Iso, Dial::Shutter, Dial::Ev]) {
@@ -4593,8 +4596,7 @@ fn build(gapp: &gtk::Application) {
             a.buzz(8);
             a.set_mode(mode);
             a.close_picker();
-            let (name, text) = MODE_NAMES[mode.index()];
-            a.show_bubble(name, text, 3);
+            a.show_pill(icons::MODES[mode.index()], MODE_NAMES[mode.index()].0, 2);
         });
     }
     let w = window.clone();
@@ -4841,13 +4843,18 @@ fn build(gapp: &gtk::Application) {
                     "zoom" => a.set_zoom(70.0),
                     "portrait" => a.apply_quarter(1),
                     "picker" => a.open_picker(),
+                    "thermal" => {
+                        set_class(&a.thermal_turn, "off", false);
+                        a.animate_thermal(1.0);
+                    }
+                    "lens" => a.show_alert("lens", icons::CAMERA, "Lens blocked", "Something is over a lens: move it away to see the whole frame.", 0),
                     "stow" => a.set_stowed(true),
                     "system" => a.show_system(true),
                     "bubble" => {
-                        let (t, x) = a.tool_note(Tool::Assist);
-                        a.show_bubble(&t, &x, 600);
+                        let (t, _) = a.tool_note(Tool::Assist);
+                        a.show_pill(a.tool_icon(Tool::Assist), &t, 600);
                     }
-                    "hint" => a.show_bubble("Hold steady", "The shutter is slow enough that a shaky hand will blur the photo. Brace the camera, or use a tripod.", 600),
+                    "hint" => a.show_alert("shake", icons::HAND_WAVE, "Hold steady", "The shutter is slow enough that a shaky hand will blur the photo. Brace the camera, or use a tripod.", 600),
                     "zoombar" => {
                         a.set_zoom(50.0);
                         a.st.borrow_mut().zoom_wheel_until = Some(Instant::now() + Duration::from_secs(60));
