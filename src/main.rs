@@ -87,6 +87,13 @@ fn css(idx: usize) -> String {
     format!("@define-color accent {};\n{CSS}", ACCENTS[idx.min(ACCENTS.len() - 1)].1)
 }
 const STRIP_LEN: f64 = 768.0;
+// the right column's width, and what is left of it when the controls are stowed; the room the
+// preview leaves for each (its margin), and the room under it for the lens strip
+const RIGHT_W: f64 = 244.0;
+const STOW_W: f64 = 104.0;
+const RESERVE_FULL: f64 = RIGHT_W + 10.0 + 12.0;
+const RESERVE_STOW: f64 = STOW_W + 10.0 + 8.0;
+const LENS_ROOM: f64 = 70.0;
 // the flyout beside an encoder
 const FLYOUT: (i32, i32) = (280, 84 + ruler::HEIGHT);
 const HIST_BINS: usize = 64;
@@ -107,7 +114,7 @@ button.flat-white:active { background: rgba(255,255,255,0.10); }
     transition: background 120ms ease, color 120ms ease, box-shadow 160ms ease, opacity 220ms ease, transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .key:active { background: #232327; }
 .key.on { color: @accent; box-shadow: inset 0 3px 0 @accent; }
-.zoom-pill { background: #121214; border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; padding: 3px; }
+.zoom-pill { background: rgba(18,18,20,0.88); border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; padding: 3px; }
 .zoom-chip { background: none; border: none; box-shadow: none; outline: none; padding: 0; border-radius: 6px;
     color: rgba(242,242,238,0.75); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
     font-size: 16px; font-weight: 700; min-width: 70px; min-height: 42px;
@@ -689,6 +696,16 @@ struct App {
     mode_btn: gtk::Button,
     // the keys in the grid's order, whether the controls are swiped away, and the system panel
     keys: Vec<gtk::Button>,
+    key_grid: gtk::Grid,
+    pin_strip: gtk::Box,
+    deck: gtk::Overlay,
+    centre: gtk::Overlay,
+    frame: gtk::AspectFrame,
+    right: gtk::Box,
+    thumb_box: gtk::Overlay,
+    stow_t: Cell<f64>,
+    stow_anim: RefCell<Option<gtk::TickCallbackId>>,
+    compact: Cell<bool>,
     stowed: Cell<bool>,
     system_turn: Rotator,
     system_timer: RefCell<Option<glib::SourceId>>,
@@ -3138,15 +3155,93 @@ impl App {
         }
     }
 
+    // the controls away: the unpinned keys fade, then the pinned ones gather in a strip beside the
+    // shutter and the preview grows into the room (with the lens strip over its foot); or back
     fn set_stowed(self: &Rc<Self>, on: bool) {
         if self.stowed.replace(on) == on {
             return;
         }
-        self.apply_stow();
         self.buzz(10);
         if on {
+            self.apply_stow();
             self.show_bubble("Controls hidden", "Swipe left to bring them back. Hold a key to pin it, so it stays.", 4);
+            let a = self.clone();
+            glib::timeout_add_local_once(Duration::from_millis(230), move || {
+                if a.stowed.get() {
+                    a.enter_compact();
+                    a.animate_deck(1.0);
+                }
+            });
+        } else {
+            self.leave_compact();
+            self.apply_stow();
+            self.animate_deck(0.0);
         }
+    }
+
+    // the pinned keys out of the grid and into the strip; the grid and the last photo away
+    fn enter_compact(&self) {
+        if self.compact.replace(true) {
+            return;
+        }
+        let pinned = self.st.borrow().pinned;
+        for (k, key) in self.keys.iter().enumerate() {
+            if pinned >> k & 1 == 1 {
+                self.key_grid.remove(key);
+                self.pin_strip.append(key);
+            }
+        }
+        self.key_grid.set_visible(false);
+        self.pin_strip.set_visible(true);
+        self.thumb_box.set_visible(false);
+    }
+
+    fn leave_compact(&self) {
+        if !self.compact.replace(false) {
+            return;
+        }
+        for (k, key) in self.keys.iter().enumerate() {
+            if key.parent().is_some_and(|p| p == *self.pin_strip.upcast_ref::<gtk::Widget>()) {
+                self.pin_strip.remove(key);
+                self.key_grid.attach(key, (k % 3) as i32, (k / 3) as i32, 1, 1);
+            }
+        }
+        self.pin_strip.set_visible(false);
+        self.key_grid.set_visible(true);
+        self.thumb_box.set_visible(true);
+    }
+
+    // the layout at @t: 0 the controls out, 1 stowed
+    fn apply_deck(&self, t: f64) {
+        let lerp = |a: f64, b: f64| a + (b - a) * t;
+        self.right.set_width_request(lerp(RIGHT_W, STOW_W) as i32);
+        self.centre.set_margin_end(lerp(RESERVE_FULL, RESERVE_STOW) as i32);
+        self.frame.set_margin_bottom(lerp(LENS_ROOM, 0.0) as i32);
+    }
+
+    // there in about a quarter of a second, on a smooth curve
+    fn animate_deck(self: &Rc<Self>, to: f64) {
+        if let Some(id) = self.stow_anim.borrow_mut().take() {
+            id.remove();
+        }
+        let a = self.clone();
+        let last = Cell::new(0i64);
+        let id = self.right.add_tick_callback(move |_, clock| {
+            let now = clock.frame_time();
+            let before = last.replace(now);
+            let dt = if before == 0 { 0.016 } else { ((now - before) as f64 / 1e6).clamp(0.001, 0.05) };
+            let cur = a.stow_t.get();
+            let step = dt / 0.26;
+            let next = if to > cur { (cur + step).min(to) } else { (cur - step).max(to) };
+            a.stow_t.set(next);
+            a.apply_deck(next * next * (3.0 - 2.0 * next));
+            if next == to {
+                a.stow_anim.replace(None);
+                return glib::ControlFlow::Break;
+            }
+            glib::ControlFlow::Continue
+        });
+        *self.stow_anim.borrow_mut() = Some(id);
     }
 
     fn toggle_pin(self: &Rc<Self>, k: usize) {
@@ -3156,6 +3251,10 @@ impl App {
             st.pinned >> k & 1 == 1
         };
         self.buzz(20);
+        if self.compact.get() {
+            self.leave_compact();
+            self.enter_compact();
+        }
         self.refresh();
         if now {
             self.show_bubble("Pinned", "It stays when you swipe the controls away.", 3);
@@ -3729,7 +3828,9 @@ fn build(gapp: &gtk::Application) {
     bubble_turn.add_css_class("off");
     bubble_turn.set_can_target(false);
     let right = gtk::Box::new(gtk::Orientation::Vertical, 10);
-    right.set_size_request(244, -1);
+    right.set_size_request(RIGHT_W as i32, -1);
+    right.set_halign(gtk::Align::End);
+    right.set_valign(gtk::Align::Fill);
     right.set_margin_end(10);
     right.set_margin_top(10);
     right.set_margin_bottom(10);
@@ -3746,20 +3847,29 @@ fn build(gapp: &gtk::Application) {
     shutter_row.append(&thumb_box);
     shutter_row.append(&shutter_fill);
     shutter_row.append(&shutter);
+    // the pinned keys, together, while the controls are stowed
+    let pin_strip = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    pin_strip.set_halign(gtk::Align::End);
+    pin_strip.set_visible(false);
     right.append(&key_grid);
+    right.append(&pin_strip);
     right.append(&spacer());
     right.append(&shutter_row);
 
     // the preview with the lens strip under it
-    let centre = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    let centre = gtk::Overlay::new();
     centre.set_hexpand(true);
-    centre.set_margin_end(12);
+    centre.set_margin_end(RESERVE_FULL as i32);
     frame.set_vexpand(true);
-    centre.append(&frame);
+    frame.set_margin_bottom(LENS_ROOM as i32);
+    centre.set_child(Some(&frame));
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     row.append(&left);
     row.append(&centre);
-    row.append(&right);
+    // the keys float over the preview's right edge, so the preview can take their room
+    let deck = gtk::Overlay::new();
+    deck.set_child(Some(&row));
+    deck.add_overlay(&right);
 
     // the settings screen (OpenLight's: a list of title, explanation and value)
     let settings_list = gtk::ListBox::new();
@@ -3824,8 +3934,9 @@ fn build(gapp: &gtk::Application) {
         zoom_pill.append(c);
     }
     zoom_pill.set_halign(gtk::Align::Center);
+    zoom_pill.set_valign(gtk::Align::End);
     zoom_pill.set_margin_bottom(10);
-    centre.append(&zoom_pill);
+    centre.add_overlay(&zoom_pill);
     let countdown = gtk::Label::new(None);
     countdown.add_css_class("countdown");
     countdown.add_css_class("spin");
@@ -3950,7 +4061,7 @@ fn build(gapp: &gtk::Application) {
     hot_screen.add_controller(gtk::GestureClick::new()); // swallows taps
 
     let root = gtk::Overlay::new();
-    root.set_child(Some(&row));
+    root.set_child(Some(&deck));
     preview.add_overlay(&lens_badge);
     // on the preview, at its bottom edge as the camera is held (place_status)
     preview.add_overlay(&thermal_turn);
@@ -4150,6 +4261,16 @@ fn build(gapp: &gtk::Application) {
         preview_gain: Cell::new(1.0),
         mode_btn,
         keys,
+        key_grid: key_grid.clone(),
+        pin_strip: pin_strip.clone(),
+        deck: deck.clone(),
+        centre: centre.clone(),
+        frame: frame.clone(),
+        right: right.clone(),
+        thumb_box: thumb_box.clone(),
+        stow_t: Cell::new(0.0),
+        stow_anim: RefCell::new(None),
+        compact: Cell::new(false),
         stowed: Cell::new(false),
         system_turn,
         system_timer: RefCell::new(None),
@@ -4324,17 +4445,26 @@ fn build(gapp: &gtk::Application) {
     let swipe = gtk::GestureDrag::new();
     swipe.set_propagation_phase(gtk::PropagationPhase::Capture);
     let done = Rc::new(Cell::new(false));
-    let d = done.clone();
-    swipe.connect_drag_begin(move |_, _, _| d.set(false));
+    let start_x = Rc::new(Cell::new(0.0f64));
+    let (d, sx) = (done.clone(), start_x.clone());
+    swipe.connect_drag_begin(move |_, x, _| {
+        d.set(false);
+        sx.set(x);
+    });
     let a = app.clone();
     swipe.connect_drag_update(move |g, dx, dy| {
-        if !done.get() && dx.abs() > 56.0 && dx.abs() > dy.abs() * 1.6 {
+        if done.get() || dx.abs() <= 56.0 || dx.abs() <= dy.abs() * 1.6 {
+            return;
+        }
+        // away: from the controls (the right of the deck), to the right; back: to the left, anywhere
+        let at_controls = start_x.get() > a.deck.width() as f64 - RIGHT_W;
+        if (dx > 0.0 && at_controls && !a.stowed.get()) || (dx < 0.0 && a.stowed.get()) {
             done.set(true);
             g.set_state(gtk::EventSequenceState::Claimed);
             a.set_stowed(dx > 0.0);
         }
     });
-    right.add_controller(swipe);
+    deck.add_controller(swipe);
     for (k, key) in app.keys.iter().enumerate() {
         let lp = gtk::GestureLongPress::new();
         let a = app.clone();
