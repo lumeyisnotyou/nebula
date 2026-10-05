@@ -17,6 +17,7 @@ mod icons;
 mod input;
 mod prox;
 mod rotate;
+mod ruler;
 mod settings;
 mod transfer;
 mod wb;
@@ -37,6 +38,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use canvas::Canvas;
 use rotate::Rotator;
+use ruler::Ruler;
 use zoomview::ZoomView;
 
 // OpenLight's value lists (res/values/arrays.xml)
@@ -62,8 +64,8 @@ const ZOOM_MAX: f64 = 150.0;
 const MODULE_MM: [f64; 2] = [28.0, 70.0];
 // the mode wheel's touch band: its labels (two either side of the chosen one)
 const MODE_TOUCH_H: i32 = 320;
-// amber: what the photographer has set; green: in focus, fine; red: clipping, warnings
-const ACCENT: (f64, f64, f64) = (1.0, 0.690, 0.180); // #FFB02E
+// orange: what the photographer has set; green: in focus, fine; red: clipping, warnings
+const ACCENT: (f64, f64, f64) = (1.0, 0.353, 0.122); // #FF5A1F, Teenage Engineering's orange
 const STRIP_LEN: f64 = 768.0;
 const HIST_BINS: usize = 64;
 
@@ -72,28 +74,28 @@ window.camera { background: #000; color: #f2f2ee; font-family: 'Adwaita Sans', '
 .mono, .hud-value, .set-value, .countdown, .burst-count { font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; }
 .hud-cell { padding: 6px 0; }
 .hud-unit { color: rgba(242,242,238,0.45); font-size: 10px; font-weight: 700; letter-spacing: 2px; }
-.hud-value { color: #f2f2ee; font-size: 19px; font-weight: 700; }
-.hud-value.fixed { color: #FFB02E; }
+.hud-value { color: #f2f2ee; font-size: 19px; font-weight: 700; transition: color 150ms ease; }
+.hud-value.fixed { color: #FF5A1F; }
 .hud-value.dim { color: rgba(242,242,238,0.35); }
-.toolbar { background: rgba(14,14,16,0.82); border-radius: 18px; margin: 0 14px 12px 14px;
+.toolbar { background: rgba(14,14,16,0.82); border-radius: 12px; margin: 0 14px 12px 14px;
     border: 1px solid rgba(255,255,255,0.10); padding: 2px 6px; }
 .toolbar button, button.flat-white { background: none; border: none; box-shadow: none; outline: none;
     color: #f2f2ee; font-size: 15px; font-weight: 600; min-width: 64px; min-height: 52px;
-    padding: 0; border-radius: 14px; }
+    padding: 0; border-radius: 8px; transition: background 140ms ease, color 140ms ease; }
 .toolbar button:active, button.flat-white:active { background: rgba(255,255,255,0.10); }
-.toolbar button.on { color: #FFB02E; }
+.toolbar button.on { color: #FF5A1F; }
 .options { background: rgba(14,14,16,0.88); margin-bottom: 8px; }
 .mode-chip { font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 13px; font-weight: 700;
-    letter-spacing: 2px; color: #FFB02E; border: 1px solid rgba(255,176,46,0.55); border-radius: 12px;
-    padding: 3px 12px; }
-.zoom-pill { background: rgba(14,14,16,0.72); border: 1px solid rgba(255,255,255,0.10);
-    border-radius: 22px; padding: 3px; }
+    letter-spacing: 2px; color: #0b0b0c; background: #FF5A1F; border-radius: 6px; padding: 3px 12px; }
+.zoom-pill { background: rgba(14,14,16,0.78); border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 10px; padding: 3px; }
 .zoom-chip { background: none; border: none; box-shadow: none; outline: none; padding: 0;
     color: rgba(242,242,238,0.75); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
-    font-size: 13px; font-weight: 700; min-width: 46px; min-height: 36px; border-radius: 18px; }
-.zoom-chip.active { background: rgba(255,176,46,0.18); color: #FFB02E; }
+    font-size: 13px; font-weight: 700; min-width: 46px; min-height: 36px; border-radius: 7px;
+    transition: background 140ms ease, color 140ms ease; }
+.zoom-chip.active { background: #FF5A1F; color: #0b0b0c; }
 .status { color: #f2f2ee; font-size: 15px; font-weight: 600; background: rgba(14,14,16,0.82);
-    border: 1px solid rgba(255,255,255,0.10); border-radius: 14px; padding: 5px 16px; }
+    border: 1px solid rgba(255,255,255,0.10); border-radius: 8px; padding: 5px 16px; }
 .countdown { color: #f2f2ee; font-size: 110px; font-weight: 700; }
 .thumb { border: 1px solid rgba(255,255,255,0.55); border-radius: 10px; }
 .blackout { background: #000; }
@@ -106,9 +108,9 @@ window.camera { background: #000; color: #f2f2ee; font-family: 'Adwaita Sans', '
 .battery-screen label { color: #f2f2ee; font-size: 22px; font-weight: 600; }
 .burst-count { color: #f2f2ee; font-size: 56px; }
 .burst-saving { color: rgba(242,242,238,0.8); font-size: 20px; }
-.assist-badge { color: #FFB02E; font-size: 15px; }
-.burst-badge { color: #FFB02E; font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 12px;
-    font-weight: 700; border: 1px solid rgba(255,176,46,0.6); border-radius: 8px; padding: 0 6px; }
+.assist-badge { color: #FF5A1F; font-size: 15px; }
+.burst-badge { color: #FF5A1F; font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 12px;
+    font-weight: 700; border: 1px solid rgba(255,90,31,0.6); border-radius: 8px; padding: 0 6px; }
 .settings { background: #000; }
 .settings list { background: #000; }
 .settings row, .chooser row { padding: 16px 32px; border-bottom: 1px solid rgba(255,255,255,0.08);
@@ -116,20 +118,24 @@ window.camera { background: #000; color: #f2f2ee; font-family: 'Adwaita Sans', '
 .settings row:active, .chooser row:active { background: rgba(255,255,255,0.08); }
 .set-title { color: #f2f2ee; font-size: 17px; font-weight: 600; }
 .set-sub { color: rgba(242,242,238,0.50); font-size: 13px; }
-.set-value { color: #FFB02E; font-size: 15px; font-weight: 700; }
+.set-value { color: #FF5A1F; font-size: 15px; font-weight: 700; }
 .set-chevron { color: rgba(242,242,238,0.45); font-size: 20px; }
 .settings switch { background: rgba(255,255,255,0.18); border: none; }
-.settings switch:checked { background: #FFB02E; }
+.settings switch:checked { background: #FF5A1F; }
 .settings switch slider { background: #f2f2ee; border: none; box-shadow: none; }
 .chooser { background: rgba(0,0,0,0.65); }
-.chooser-card { background: #16161a; border-radius: 18px; border: 1px solid rgba(255,255,255,0.10); }
+.chooser-card { background: #16161a; border-radius: 12px; border: 1px solid rgba(255,255,255,0.10); }
 .chooser-card list { background: none; }
 .chooser-title { color: rgba(242,242,238,0.5); font-size: 12px; font-weight: 700; letter-spacing: 2px;
     padding: 18px 32px 8px 32px; }
-.chooser-check { color: #FFB02E; font-size: 18px; font-weight: 700; }
+.chooser-check { color: #FF5A1F; font-size: 18px; font-weight: 700; }
 .spin { transition: transform 50ms ease-in; }
 window.rot-cw .spin { transform: rotate(90deg); }
 window.rot-ccw .spin { transform: rotate(-90deg); }
+.fade { transition: opacity 180ms ease; }
+.fade.off { opacity: 0; }
+.mode-wheel { transition: opacity 200ms ease, transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.mode-wheel.off { opacity: 0; transform: translateX(28px); }
 ";
 
 #[derive(Clone, Copy, PartialEq)]
@@ -575,7 +581,8 @@ struct App {
     view: ZoomView,
     marks: Canvas,
     hist_area: Canvas,
-    wheels: Canvas,
+    wheels: Ruler,
+    wheels_turn: Rotator,
     hud: Vec<gtk::Label>,
     top: Canvas,
     bottom: Canvas,
@@ -790,6 +797,48 @@ fn text_q(cr: &cairo::Context, s: &str, x: f64, y: f64, size: f64, align: f64, q
     cr.rotate(q as f64 * PI / 2.0);
     text(cr, s, 0.0, 0.0, size, 0.5);
     cr.restore().ok();
+}
+
+fn set_class(w: &impl IsA<gtk::Widget>, class: &str, on: bool) {
+    if on {
+        w.add_css_class(class);
+    } else {
+        w.remove_css_class(class);
+    }
+}
+
+// the ruler's scale for an exposure value: its list's entries, labelled where there is room
+// (every ISO; the whole stops of shutter and EV)
+fn exposure_spec(dial: Dial, inverse: bool) -> ruler::Spec {
+    let dir = if inverse { -1.0 } else { 1.0 };
+    let tick = |pos: f64, label: Option<String>| ruler::Tick { pos, label };
+    let (unit, ticks) = match dial {
+        Dial::Iso => ("ISO", ISO.iter().map(|&i| tick(iso_pos(i as f64), Some(i.to_string()))).collect()),
+        Dial::Shutter => (
+            "SHUTTER",
+            SHUTTER
+                .iter()
+                .enumerate()
+                .map(|(k, s)| tick(secs_pos(shutter_secs(s)), (k % 3 == 0).then(|| s.to_string())))
+                .collect(),
+        ),
+        Dial::Ev => ("EV", (-9..=9).map(|e| tick(ev_pos(e), (e % 3 == 0).then(|| fmt_ev(e)))).collect()),
+    };
+    // the finger moves the value by 0.001 a pixel (wheel_drag): the scale moves as far
+    ruler::Spec { unit, ticks, px_per_unit: 1000.0, dir }
+}
+
+// the zoom's: focal lengths on a log scale, the primes labelled
+fn zoom_spec() -> ruler::Spec {
+    const MM: [f64; 11] = [28.0, 30.0, 35.0, 40.0, 50.0, 60.0, 70.0, 85.0, 100.0, 120.0, 150.0];
+    let ticks = MM
+        .iter()
+        .map(|&mm| ruler::Tick {
+            pos: (mm / ZOOM_MIN).ln(),
+            label: PRIMES.contains(&mm).then(|| format!("{mm:.0}")),
+        })
+        .collect();
+    ruler::Spec { unit: "MM", ticks, px_per_unit: 300.0, dir: 1.0 }
 }
 
 fn make_pipeline() -> (gst::Pipeline, gdk::Paintable) {
@@ -1402,15 +1451,15 @@ impl App {
             return;
         }
         self.toolbar.set_reveal_child(open);
-        self.zoom_turn.set_visible(!open);
         if !open {
             self.options_for.set(None);
             self.options.set_reveal_child(false);
         }
-        self.right.set_opacity(if open { 0.0 } else { 1.0 });
+        set_class(&self.right, "off", open);
         self.right.set_can_target(!open);
-        self.mode_wheel.set_visible(open);
-        self.mode_touch.set_visible(open);
+        set_class(&self.mode_wheel, "off", !open);
+        self.mode_touch.set_can_target(open);
+        self.update_pill();
         let pos = self.st.borrow().mode.index() as f64 / (MODES.len() - 1) as f64;
         self.st.borrow_mut().mode_pos = pos;
         self.mode_wheel.queue_draw();
@@ -1447,6 +1496,10 @@ impl App {
     fn follow_orientation(&self, accel: &gtk::gio::DBusProxy) {
         let o = accel.cached_property("AccelerometerOrientation").and_then(|v| v.get::<String>());
         let Some(q) = o.as_deref().and_then(quarter_for) else { return };
+        self.apply_quarter(q);
+    }
+
+    fn apply_quarter(&self, q: i32) {
         if self.quarter.replace(q) == q {
             return;
         }
@@ -1464,7 +1517,6 @@ impl App {
         }
         self.place_status(q);
         self.lens_badge.queue_draw();
-        self.wheels.queue_draw();
         self.mode_wheel.queue_draw();
     }
 
@@ -1475,6 +1527,13 @@ impl App {
         place_on_edge(&self.status_turn, q, true, 14);
         place_on_edge(&self.thermal_turn, q, false, 70);
         place_on_edge(&self.zoom_turn, q, false, 14);
+        // the ruler runs the whole edge
+        place_on_edge(&self.wheels_turn, q, false, 0);
+        if q == 0 {
+            self.wheels_turn.set_halign(gtk::Align::Fill);
+        } else {
+            self.wheels_turn.set_valign(gtk::Align::Fill);
+        }
     }
 
     // degrees between the mode wheel's labels (stock's 2 and 4 dip, as angles)
@@ -2896,95 +2955,92 @@ impl App {
         }
     }
 
-    // the wheels' layer, shown while there is a wheel
+    // the ruler at the preview's bottom edge, while an exposure value is being set (to drag) or
+    // the zoom has just changed (to read); it fades in and out
     fn update_wheels(&self) {
-        let shown = {
+        let (mut shown, mut touch) = (false, false);
+        let was_off = self.wheels_turn.has_css_class("off");
+        {
             let st = self.st.borrow();
-            st.wheel.is_some() || st.zoom_wheel_until.is_some_and(|t| Instant::now() < t)
+            if let Some(dial) = st.wheel {
+                let (key, pos, value) = match dial {
+                    Dial::Iso => (1, st.iso, iso_at(st.iso).to_string()),
+                    Dial::Shutter => (2, st.shutter, fmt_secs(secs_at(st.shutter))),
+                    Dial::Ev => (3, st.ev, fmt_ev(ev_at(st.ev))),
+                };
+                let inverse = st.inverse_wheel;
+                self.wheels.configure(key + if inverse { 10 } else { 0 }, || exposure_spec(dial, inverse));
+                self.wheels.set(pos, &value);
+                (shown, touch) = (true, true);
+            } else if st.zoom_wheel_until.is_some_and(|t| Instant::now() < t) {
+                self.wheels.configure(20, zoom_spec);
+                self.wheels.set((st.zoom / ZOOM_MIN).ln(), &format!("{:.0}", st.zoom));
+                shown = true;
+            }
+        }
+        if shown && was_off {
+            self.wheels.jump();
+        }
+        set_class(&self.wheels_turn, "off", !shown);
+        self.wheels_turn.set_can_target(touch);
+        self.update_pill();
+    }
+
+    // the lens pill gives way to the ruler and to the toolbar
+    fn update_pill(&self) {
+        let off = !self.wheels_turn.has_css_class("off") || self.toolbar.reveals_child();
+        set_class(&self.zoom_turn, "off", off);
+        self.zoom_turn.set_can_target(!off);
+    }
+
+    // a finger on a dial (or on the ruler, still up): the value to follow it from
+    fn wheel_grab(self: &Rc<Self>, dial: Dial) {
+        {
+            let mut st = self.st.borrow_mut();
+            if let Some(id) = st.wheel_close.take() {
+                id.remove();
+            }
+            st.wheel = Some(dial);
+            st.wheel_start = match dial {
+                Dial::Iso => st.iso,
+                Dial::Shutter => st.shutter,
+                Dial::Ev => st.ev,
+            };
+        }
+        self.buzz(15);
+        self.refresh();
+        self.update_wheels();
+    }
+
+    // the finger @dx along the ruler (in the UI's own direction): the scale goes with it, so
+    // the value falls as it moves right
+    fn wheel_drag(&self, dx: f64) {
+        let (dial, start, dir) = {
+            let st = self.st.borrow();
+            (st.wheel, st.wheel_start, if st.inverse_wheel { -1.0 } else { 1.0 })
         };
-        self.wheels.set_visible(shown);
-        if shown {
-            self.wheels.queue_draw();
+        if let Some(dial) = dial {
+            self.set_dial(dial, start - dir * dx * 0.001);
         }
     }
 
-    fn draw_wheels(&self, cr: &cairo::Context, w: f64, h: f64) {
-        let st = self.st.borrow();
-        let q = self.quarter.get();
-        cr.select_font_face("Adwaita Mono", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
-        // the exposure wheel: the value lists as ticks on an arc beside the dials, turning
-        // with the (continuous) value, which sits on the pointer
-        if let Some(dial) = st.wheel {
-            let (pos, value, ticks): (f64, String, Vec<(f64, String)>) = match dial {
-                Dial::Iso => (
-                    st.iso,
-                    iso_at(st.iso).to_string(),
-                    ISO.iter().map(|&i| (iso_pos(i as f64), i.to_string())).collect(),
-                ),
-                Dial::Shutter => (
-                    st.shutter,
-                    fmt_secs(secs_at(st.shutter)),
-                    SHUTTER.iter().map(|s| (secs_pos(shutter_secs(s)), s.to_string())).collect(),
-                ),
-                Dial::Ev => (st.ev, fmt_ev(ev_at(st.ev)), (-9..=9).map(|e| (ev_pos(e), fmt_ev(e))).collect()),
-            };
-            let r = 400.0;
-            let (cx, cy) = (w - 340.0 + r, h / 2.0);
-            // 0.1 rad between neighbouring list entries, as before
-            let k = 0.1 * (ticks.len() - 1) as f64;
-            cr.set_source_rgba(1.0, 1.0, 1.0, 0.25);
-            cr.set_line_width(2.0);
-            cr.arc(cx, cy, r, PI - 0.7, PI + 0.7);
-            let _ = cr.stroke();
-            for (tp, l) in &ticks {
-                // lower values below (the finger goes down for less light)
-                let d = (tp - pos) * k;
-                if d.abs() > 0.6 {
-                    continue;
-                }
-                let a = PI - d;
-                let (x, y) = (cx + r * a.cos(), cy + r * a.sin());
-                cr.set_source_rgba(1.0, 1.0, 1.0, 1.0 - d.abs() / 0.7);
-                cr.arc(x, y, 3.0, 0.0, 2.0 * PI);
-                let _ = cr.fill();
-                if d.abs() > 0.06 {
-                    text_q(cr, l, x - 18.0, y, 20.0, 1.0, q);
-                }
-            }
-            let (x, y) = (cx - r, cy);
-            cr.set_source_rgb(ACCENT.0, ACCENT.1, ACCENT.2);
-            cr.arc(x, y, 5.0, 0.0, 2.0 * PI);
-            let _ = cr.fill();
-            text_q(cr, &value, x - 18.0, y, 34.0, 1.0, q);
+    // the finger lifted: the ruler stays a moment
+    fn wheel_release(self: &Rc<Self>) {
+        if self.st.borrow().wheel.is_none() {
+            return;
         }
-        // the zoom wheel: an arc of dots from 28 (bottom) to 150 mm (top), primes labelled
-        if st.zoom_wheel_until.is_some_and(|t| Instant::now() < t) {
-            let r = 300.0;
-            let (cx, cy) = (w - 340.0 + r, h / 2.0);
-            let angle = |z: f64| PI - 0.55 + 1.1 * (z / ZOOM_MIN).ln() / (ZOOM_MAX / ZOOM_MIN).ln();
-            let point = |z: f64| {
-                let a = angle(z);
-                (cx + r * a.cos(), cy + r * a.sin())
-            };
-            cr.set_source_rgba(1.0, 1.0, 1.0, 0.6);
-            for k in 0..=30 {
-                let z = ZOOM_MIN * (ZOOM_MAX / ZOOM_MIN).powf(k as f64 / 30.0);
-                let (x, y) = point(z);
-                cr.arc(x, y, 2.0, 0.0, 2.0 * PI);
-                let _ = cr.fill();
-            }
-            for &p in PRIMES {
-                let (x, y) = point(p);
-                cr.set_source_rgb(1.0, 1.0, 1.0);
-                cr.arc(x, y, 4.0, 0.0, 2.0 * PI);
-                let _ = cr.fill();
-                text_q(cr, &format!("{p:.0}"), x + 12.0, y, 14.0, 0.0, q);
-            }
-            let (x, y) = point(st.zoom);
-            cr.set_source_rgb(ACCENT.0, ACCENT.1, ACCENT.2);
-            cr.arc(x, y, 7.0, 0.0, 2.0 * PI);
-            let _ = cr.fill();
-            text_q(cr, &format!("{:.0} mm", st.zoom), x - 18.0, y, 30.0, 1.0, q);
+        self.buzz(10);
+        let b = self.clone();
+        let id = glib::timeout_add_local_once(Duration::from_millis(600), move || {
+            let mut st = b.st.borrow_mut();
+            st.wheel_close = None;
+            st.wheel = None;
+            drop(st);
+            b.refresh();
+            b.update_wheels();
+        });
+        if let Some(old) = self.st.borrow_mut().wheel_close.replace(id) {
+            old.remove();
         }
     }
 
@@ -3350,6 +3406,7 @@ fn build(gapp: &gtk::Application) {
     opener.set_halign(gtk::Align::Center);
     opener.set_margin_bottom(8);
     let right = gtk::Box::new(gtk::Orientation::Vertical, 13);
+    right.add_css_class("fade");
     right.set_size_request(200, -1);
     let spacer = || {
         let s = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -3470,19 +3527,25 @@ fn build(gapp: &gtk::Application) {
     mode_wheel.set_halign(gtk::Align::End);
     mode_wheel.set_size_request(386, -1); // stock's 225 dp
     mode_wheel.set_can_target(false);
-    mode_wheel.set_visible(false);
+    mode_wheel.add_css_class("mode-wheel");
+    mode_wheel.add_css_class("off");
     let mode_touch = gtk::Box::new(gtk::Orientation::Vertical, 0);
     mode_touch.set_halign(gtk::Align::End);
     mode_touch.set_valign(gtk::Align::Center);
     mode_touch.set_size_request(386, MODE_TOUCH_H);
-    mode_touch.set_visible(false);
+    mode_touch.set_can_target(false);
 
     // shown only while a wheel is (exposure, or zoom just changed)
-    let wheels = Canvas::new();
-    wheels.set_can_target(false);
-    wheels.set_visible(false);
-    wheels.set_halign(gtk::Align::End);
-    wheels.set_size_request(560, -1);
+    let wheels = Ruler::new();
+    wheels.set_halign(gtk::Align::Fill);
+    wheels.set_valign(gtk::Align::End);
+    wheels.set_margin_start(12);
+    wheels.set_margin_end(12);
+    wheels.set_margin_bottom(12);
+    let wheels_turn = turn(wheels.upcast_ref());
+    wheels_turn.add_css_class("fade");
+    wheels_turn.add_css_class("off");
+    wheels_turn.set_can_target(false);
     let status = gtk::Label::new(None);
     status.add_css_class("status");
     status.set_valign(gtk::Align::Start);
@@ -3508,6 +3571,7 @@ fn build(gapp: &gtk::Application) {
     zoom_pill.set_valign(gtk::Align::End);
     zoom_pill.set_margin_bottom(14);
     let zoom_turn = turn(zoom_pill.upcast_ref());
+    zoom_turn.add_css_class("fade");
     let countdown = gtk::Label::new(None);
     countdown.add_css_class("countdown");
     countdown.add_css_class("spin");
@@ -3637,8 +3701,8 @@ fn build(gapp: &gtk::Application) {
     // on the preview, at its bottom edge as the camera is held (place_status)
     preview.add_overlay(&thermal_turn);
     preview.add_overlay(&zoom_turn);
+    preview.add_overlay(&wheels_turn);
     root.add_overlay(&status_box_turn);
-    root.add_overlay(&wheels);
     preview.add_overlay(&status_turn);
     root.add_overlay(&countdown);
     root.add_overlay(&toolbar);
@@ -3799,6 +3863,7 @@ fn build(gapp: &gtk::Application) {
         hist_area,
         focus_area,
         wheels,
+        wheels_turn,
         hud,
         top,
         bottom,
@@ -3891,7 +3956,6 @@ fn build(gapp: &gtk::Application) {
         }
     });
     let a = app.clone();
-    app.wheels.set_draw_func(move |_, cr, w, h| a.draw_wheels(cr, w as f64, h as f64));
 
     let a = app.clone();
     app.lens_badge.set_draw_func(move |_, cr, w, h| a.draw_lens_blocked(cr, w as f64, h as f64));
@@ -3959,59 +4023,39 @@ fn build(gapp: &gtk::Application) {
     });
     app.view.add_controller(pinch);
 
-    // the dials: tap and drag (which dial is which depends on the mode)
+    // the dials: tap and drag (which dial is which depends on the mode). The drag moves the
+    // ruler along the preview's bottom edge: sideways as the camera is held, so in portrait it
+    // is the screen's vertical
     for (widget, top) in [(app.top.clone(), true), (app.bottom.clone(), false)] {
         let drag = gtk::GestureDrag::new();
         let a = app.clone();
         drag.connect_drag_begin(move |_, _, _| {
-            let mut st = a.st.borrow_mut();
-            let (top_dial, bottom_dial) = st.mode.dials();
+            let (top_dial, bottom_dial) = a.st.borrow().mode.dials();
             let Some(dial) = (if top { top_dial } else { Some(bottom_dial) }) else { return };
-            if let Some(id) = st.wheel_close.take() {
-                id.remove();
-            }
-            st.wheel = Some(dial);
-            st.wheel_start = match dial {
-                Dial::Iso => st.iso,
-                Dial::Shutter => st.shutter,
-                Dial::Ev => st.ev,
-            };
-            drop(st);
-            a.buzz(15);
-            a.refresh();
-            a.update_wheels();
+            a.wheel_grab(dial);
         });
         let a = app.clone();
-        drag.connect_drag_update(move |_, _, dy| {
-            let (dial, start, dir) = {
-                let st = a.st.borrow();
-                (st.wheel, st.wheel_start, if st.inverse_wheel { -1.0 } else { 1.0 })
-            };
-            if let Some(dial) = dial {
-                a.set_dial(dial, start + dir * dy * 0.001);
-            }
+        drag.connect_drag_update(move |_, dx, dy| {
+            let q = a.quarter.get();
+            a.wheel_drag(if q == 0 { dx } else { q as f64 * dy });
         });
         let a = app.clone();
-        drag.connect_drag_end(move |_, _, _| {
-            if a.st.borrow().wheel.is_none() {
-                return;
-            }
-            a.buzz(10);
-            let b = a.clone();
-            let id = glib::timeout_add_local_once(Duration::from_millis(600), move || {
-                let mut st = b.st.borrow_mut();
-                st.wheel_close = None;
-                st.wheel = None;
-                drop(st);
-                b.refresh();
-                b.update_wheels();
-            });
-            if let Some(old) = a.st.borrow_mut().wheel_close.replace(id) {
-                old.remove();
-            }
-        });
+        drag.connect_drag_end(move |_, _, _| a.wheel_release());
         widget.add_controller(drag);
     }
+    // and the ruler itself, while it shows (a touch on it is in its own, turned, coordinates)
+    let bar_drag = gtk::GestureDrag::new();
+    let a = app.clone();
+    bar_drag.connect_drag_begin(move |_, _, _| {
+        if let Some(dial) = a.st.borrow().wheel {
+            a.wheel_grab(dial);
+        }
+    });
+    let a = app.clone();
+    bar_drag.connect_drag_update(move |_, dx, _| a.wheel_drag(dx));
+    let a = app.clone();
+    bar_drag.connect_drag_end(move |_, _, _| a.wheel_release());
+    app.wheels.add_controller(bar_drag);
 
     let click = gtk::GestureClick::new();
     let a = app.clone();
@@ -4315,6 +4359,12 @@ fn build(gapp: &gtk::Application) {
                         a.refresh();
                     }
                     "zoom" => a.set_zoom(70.0),
+                    "portrait" => a.apply_quarter(1),
+                    "zoombar" => {
+                        a.set_zoom(50.0);
+                        a.st.borrow_mut().zoom_wheel_until = Some(Instant::now() + Duration::from_secs(60));
+                        a.update_wheels();
+                    }
                     "settings" => {
                         a.show_toolbar(false);
                         a.fill_settings();
