@@ -26,6 +26,8 @@ pub struct Spec {
     pub ticks: Vec<Tick>,
     // pixels per unit of position, and the sign: +1 puts a greater position lower down
     pub px_per_unit: f64,
+    // the value written above the scale (the exposure values have a flyout beside their encoder)
+    pub show_value: bool,
     pub dir: f64,
 }
 
@@ -113,8 +115,12 @@ mod imp {
             }
             // the pointer across the scale, the value above it and the unit under that
             snapshot.append_color(&orange(1.0), &graphene::Rect::new(w - 62.0, cy - 1.5, 52.0, 3.0));
-            text(&self.value.borrow(), w / 2.0, 26.0, 26.0, &orange(1.0));
-            text(spec.unit, w / 2.0, 52.0, 11.0, &white(0.5));
+            if spec.show_value {
+                text(&self.value.borrow(), w / 2.0, 26.0, 26.0, &orange(1.0));
+                text(spec.unit, w / 2.0, 52.0, 11.0, &white(0.5));
+            } else {
+                text(spec.unit, w / 2.0, 30.0, 12.0, &white(0.6));
+            }
             snapshot.pop();
             snapshot.append_border(&panel, &[1.0; 4], &[white(0.10), white(0.10), white(0.10), white(0.10)]);
         }

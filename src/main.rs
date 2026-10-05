@@ -38,6 +38,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use canvas::Canvas;
+use dots::NumAnim;
 use rotate::Rotator;
 use ruler::Ruler;
 use zoomview::ZoomView;
@@ -66,11 +67,14 @@ const MODULE_MM: [f64; 2] = [28.0, 70.0];
 // orange: what the photographer has set; green: in focus, fine; red: clipping, warnings
 const ACCENT: (f64, f64, f64) = (1.0, 0.353, 0.122); // #FF5A1F, Teenage Engineering's orange
 const STRIP_LEN: f64 = 768.0;
+// the flyout beside an encoder
+const FLYOUT: (i32, i32) = (240, 112);
 const HIST_BINS: usize = 64;
 
 const CSS: &str = "
 window.camera { background: #000; color: #f2f2ee; font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; }
 .mono, .set-value, .countdown, .burst-count { font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; }
+.flyout { background: #101012; border: 1px solid rgba(255,90,31,0.55); border-radius: 10px; }
 .encoder { background: #121214; border: 1px solid rgba(255,255,255,0.09); border-radius: 10px;
     transition: border-color 160ms ease; }
 button.flat-white { background: none; border: none; box-shadow: none; outline: none; color: #f2f2ee;
@@ -535,6 +539,14 @@ struct App {
     // the three encoders (ISO, shutter, EV) and what each was last drawn for (refresh)
     encoders: Vec<Canvas>,
     enc_shown: Cell<[u64; 3]>,
+    // their values, rolling from one to the next
+    enc_anim: Vec<Rc<NumAnim>>,
+    // the big readout that opens beside an encoder while it is held, out from under the thumb
+    flyout: Canvas,
+    flyout_turn: Rotator,
+    flyout_anim: Rc<NumAnim>,
+    flyout_unit: Cell<&'static str>,
+    root: gtk::Overlay,
     shutter: Canvas,
     thumb: gtk::Image,
     thumb_spin: gtk::DrawingArea,
@@ -773,6 +785,18 @@ fn text_at(cr: &cairo::Context, s: &str, x: f64, y: f64, size: f64) {
     text(cr, s, x, y, size, 0.5);
 }
 
+fn dial_index(dial: Dial) -> usize {
+    match dial {
+        Dial::Iso => 0,
+        Dial::Shutter => 1,
+        Dial::Ev => 2,
+    }
+}
+
+fn dial_name(dial: Dial) -> &'static str {
+    ["ISO", "SHUTTER", "EV"][dial_index(dial)]
+}
+
 fn set_class(w: &impl IsA<gtk::Widget>, class: &str, on: bool) {
     if on {
         w.add_css_class(class);
@@ -799,7 +823,7 @@ fn exposure_spec(dial: Dial, inverse: bool) -> ruler::Spec {
         Dial::Ev => ("EV", (-9..=9).map(|e| tick(ev_pos(e), (e % 3 == 0).then(|| fmt_ev(e)))).collect()),
     };
     // the finger moves the value by 0.001 a pixel (wheel_drag): the pointer moves as far
-    ruler::Spec { unit, ticks, px_per_unit: 1000.0, dir }
+    ruler::Spec { unit, ticks, px_per_unit: 1000.0, dir, show_value: false }
 }
 
 // the zoom's: focal lengths on a log scale, the primes labelled
@@ -812,7 +836,7 @@ fn zoom_spec() -> ruler::Spec {
             label: PRIMES.contains(&mm).then(|| format!("{mm:.0}")),
         })
         .collect();
-    ruler::Spec { unit: "MM", ticks, px_per_unit: 300.0, dir: -1.0 }
+    ruler::Spec { unit: "MM", ticks, px_per_unit: 300.0, dir: -1.0, show_value: true }
 }
 
 fn make_pipeline() -> (gst::Pipeline, gdk::Paintable) {
@@ -971,6 +995,10 @@ impl App {
         let saved = st.saved();
         let busy = st.busy;
         let enc = [Dial::Iso, Dial::Shutter, Dial::Ev].map(|d| encoder_key(&st, d));
+        for (k, d) in [Dial::Iso, Dial::Shutter, Dial::Ev].into_iter().enumerate() {
+            let (_, text, frac, _) = encoder_shows(&st, d);
+            self.enc_anim[k].set(&self.encoders[k], &text, frac);
+        }
         let grid = st.grid | (st.histogram as u8) << 4;
         let geotag = st.geotag && !st.asleep;
         drop(st);
@@ -2667,7 +2695,7 @@ impl App {
     // the ruler at the preview's bottom edge, while an exposure value is being set (to drag) or
     // the zoom has just changed (to read); it fades in and out
     fn update_wheels(&self) {
-        let (mut shown, mut touch) = (false, false);
+        let (mut shown, mut touch, mut flyout_on) = (false, false, false);
         let was_off = self.wheels_turn.has_css_class("off");
         {
             let st = self.st.borrow();
@@ -2680,6 +2708,9 @@ impl App {
                 let inverse = st.inverse_wheel;
                 self.wheels.configure(key + if inverse { 10 } else { 0 }, || exposure_spec(dial, inverse));
                 self.wheels.set(pos, &value);
+                self.flyout_unit.set(dial_name(dial));
+                self.flyout_anim.set(&self.flyout, &value, 1.0 - pos);
+                flyout_on = true;
                 (shown, touch) = (true, true);
             } else if st.zoom_wheel_until.is_some_and(|t| Instant::now() < t) {
                 self.wheels.configure(20, zoom_spec);
@@ -2691,6 +2722,7 @@ impl App {
             self.wheels.jump();
         }
         set_class(&self.wheels_turn, "off", !shown);
+        set_class(&self.flyout_turn, "off", !flyout_on);
         self.wheels_turn.set_can_target(touch);
     }
 
@@ -2717,6 +2749,7 @@ impl App {
                 Dial::Ev => st.ev,
             };
         }
+        self.place_flyout(dial);
         self.buzz(15);
         self.refresh();
         self.update_wheels();
@@ -2778,8 +2811,31 @@ impl App {
         cr.select_font_face("Adwaita Mono", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
         cr.set_source_rgba(on.0, on.1, on.2, if active { 1.0 } else { 0.7 });
         text_at(cr, name, cx, cy, 12.0);
-        let pitch = dots::fit(&text, w - 24.0, 3.6);
-        dots::draw(cr, &text, cx, cy + r + 12.0, pitch, on);
+        let anim = &self.enc_anim[dial_index(dial)];
+        let shown = if anim.text().is_empty() { text } else { anim.text() };
+        let pitch = dots::fit(&shown, w - 24.0, 3.6);
+        anim.draw(cr, cx, cy + r + 12.0, pitch, on);
+    }
+
+    // the flyout: what is being set, large, in dot matrix
+    fn draw_flyout(&self, cr: &cairo::Context, w: f64, h: f64) {
+        cr.select_font_face("Adwaita Mono", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.55);
+        text(cr, self.flyout_unit.get(), 16.0, 20.0, 12.0, 0.0);
+        let value = self.flyout_anim.text();
+        let pitch = dots::fit(&value, w - 36.0, 6.4);
+        let top = 34.0 + (h - 34.0 - 7.0 * pitch) / 2.0 - 6.0;
+        self.flyout_anim.draw(cr, w / 2.0, top, pitch, (ACCENT.0, ACCENT.1, ACCENT.2, 1.0));
+    }
+
+    // the flyout beside the encoder of @dial, centred on its height: to its right, on the
+    // preview, where the thumb that holds the encoder does not cover it
+    fn place_flyout(&self, dial: Dial) {
+        let Some(b) = self.encoders[dial_index(dial)].compute_bounds(&self.root) else { return };
+        let (fw, fh) = if self.quarter.get() == 0 { (FLYOUT.0, FLYOUT.1) } else { (FLYOUT.1, FLYOUT.0) };
+        let _ = fw;
+        self.flyout_turn.set_margin_start((b.x() + b.width() + 8.0) as i32);
+        self.flyout_turn.set_margin_top((b.y() + (b.height() - fh as f32) / 2.0).max(4.0) as i32);
     }
 
     fn draw_shutter(&self, cr: &cairo::Context, w: f64, h: f64) {
@@ -3034,6 +3090,15 @@ fn build(gapp: &gtk::Application) {
             c
         })
         .collect();
+    let flyout = Canvas::new();
+    flyout.set_size_request(FLYOUT.0, FLYOUT.1);
+    flyout.add_css_class("flyout");
+    let flyout_turn = turn(flyout.upcast_ref());
+    flyout_turn.set_halign(gtk::Align::Start);
+    flyout_turn.set_valign(gtk::Align::Start);
+    flyout_turn.set_can_target(false);
+    flyout_turn.add_css_class("fade");
+    flyout_turn.add_css_class("off");
     let left = gtk::Box::new(gtk::Orientation::Vertical, 10);
     left.set_valign(gtk::Align::Center);
     left.set_margin_start(10);
@@ -3378,6 +3443,7 @@ fn build(gapp: &gtk::Application) {
     preview.add_overlay(&status_turn);
     root.add_overlay(&countdown);
     root.add_overlay(&burst_screen);
+    root.add_overlay(&flyout_turn);
     root.add_overlay(&battery_screen);
     root.add_overlay(&hot_screen);
     root.add_overlay(&settings_page);
@@ -3531,6 +3597,12 @@ fn build(gapp: &gtk::Application) {
         wheels_turn,
         encoders,
         enc_shown: Cell::new([0; 3]),
+        enc_anim: (0..3).map(|_| NumAnim::new()).collect(),
+        flyout: flyout.clone(),
+        flyout_turn: flyout_turn.clone(),
+        flyout_anim: NumAnim::new(),
+        flyout_unit: Cell::new(""),
+        root: root.clone(),
         shutter,
         thumb,
         thumb_spin,
@@ -3616,6 +3688,8 @@ fn build(gapp: &gtk::Application) {
         let a = app.clone();
         c.set_draw_func(move |_, cr, w, h| a.draw_encoder(cr, w as f64, h as f64, dial));
     }
+    let a = app.clone();
+    app.flyout.set_draw_func(move |_, cr, w, h| a.draw_flyout(cr, w as f64, h as f64));
     let a = app.clone();
     app.thumb_spin.set_draw_func(move |_, cr, w, h| a.draw_thumb_spin(cr, w as f64, h as f64));
     app.burst_dots.set_draw_func(|_, cr, w, h| {
@@ -3942,6 +4016,11 @@ fn build(gapp: &gtk::Application) {
                     }
                     "iso" | "shutter" | "ev" => {
                         a.st.borrow_mut().wheel = Some(match v {
+                            "iso" => Dial::Iso,
+                            "shutter" => Dial::Shutter,
+                            _ => Dial::Ev,
+                        });
+                        a.place_flyout(match v {
                             "iso" => Dial::Iso,
                             "shutter" => Dial::Shutter,
                             _ => Dial::Ev,
