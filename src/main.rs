@@ -1304,7 +1304,9 @@ impl App {
     // place ("spin"), the rotators re-lay their text out, the wheels turn their labels
     fn follow_orientation(&self, accel: &gtk::gio::DBusProxy) {
         let o = accel.cached_property("AccelerometerOrientation").and_then(|v| v.get::<String>());
-        let Some(q) = o.as_deref().and_then(quarter_for) else { return };
+        let q = o.as_deref().and_then(quarter_for);
+        eprintln!("l16-camera2: orientation {o:?} -> quarter {q:?} (was {})", self.quarter.get());
+        let Some(q) = q else { return };
         self.apply_quarter(q);
     }
 
