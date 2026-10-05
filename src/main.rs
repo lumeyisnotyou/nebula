@@ -3194,7 +3194,7 @@ impl App {
             "Linux".into()
         };
         vec![
-            format!("Viewfinder 2  v{}", env!("CARGO_PKG_VERSION")),
+            format!("Nebula  v{}", env!("CARGO_PKG_VERSION")),
             os,
             kernel,
             gst::version_string().to_string(),
@@ -3606,7 +3606,7 @@ fn build(gapp: &gtk::Application) {
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 
-    let window = gtk::ApplicationWindow::builder().application(gapp).title("Viewfinder").build();
+    let window = gtk::ApplicationWindow::builder().application(gapp).title("Nebula").build();
     window.add_css_class("camera");
 
     let (pipeline, paintable) = make_pipeline();
@@ -3790,7 +3790,7 @@ fn build(gapp: &gtk::Application) {
     };
     let settings_btn = side_row(icons::COG, "Settings");
     let close_btn = side_row(icons::CLOSE, "Close the camera");
-    let side_title = gtk::Label::new(Some("VIEWFINDER 2"));
+    let side_title = gtk::Label::new(Some("NEBULA"));
     side_title.add_css_class("side-title");
     side_title.set_xalign(0.0);
     let side_head = gtk::Label::new(Some("QUICK SETTINGS"));
