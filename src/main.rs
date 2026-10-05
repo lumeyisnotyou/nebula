@@ -112,7 +112,10 @@ const STRIP_LEN: f64 = 768.0;
 // the right column's width, and what is left of it when the controls are stowed; the room the
 // preview leaves for each (its margin), and the room under it for the lens strip
 const RIGHT_W: f64 = 244.0;
-const STOW_W: f64 = 104.0;
+const STOW_W: f64 = 100.0;
+// a key's height, and the shutter's and the gallery's size when the controls are stowed
+const KEY_H: f64 = 74.0;
+const SHUTTER_W: f64 = 92.0;
 const RESERVE_FULL: f64 = RIGHT_W + 10.0 + 12.0;
 const RESERVE_STOW: f64 = STOW_W + 10.0 + 8.0;
 const LENS_ROOM: f64 = 70.0;
@@ -742,6 +745,8 @@ struct App {
     frame: gtk::AspectFrame,
     right: gtk::Box,
     thumb_box: gtk::Overlay,
+    shutter_row: gtk::Box,
+    shutter_fill: gtk::Box,
     stow_t: Cell<f64>,
     stow_anim: RefCell<Option<gtk::TickCallbackId>>,
     compact: Cell<bool>,
@@ -3222,21 +3227,39 @@ impl App {
         }
     }
 
-    // the pinned keys out of the grid and into the strip; the grid and the last photo away
+    // how many pinned keys fit in the narrow column: its height less the gallery, the shutter
+    // and the gaps, in keys
+    fn pin_cap(&self) -> usize {
+        let h = self.root.height() as f64;
+        if h < 100.0 {
+            return 3;
+        }
+        let room = h - 20.0 - SHUTTER_W - SHUTTER_W - 20.0 + 8.0;
+        ((room / (KEY_H + 8.0)).floor() as usize).max(1)
+    }
+
+    // the pinned keys out of the grid and into the strip at the shutter's width; the gallery
+    // above the shutter, both in the narrow column
     fn enter_compact(&self) {
         if self.compact.replace(true) {
             return;
         }
-        let pinned = self.st.borrow().pinned;
+        let (pinned, cap) = (self.st.borrow().pinned, self.pin_cap());
+        let mut placed = 0;
         for (k, key) in self.keys.iter().enumerate() {
-            if pinned >> k & 1 == 1 {
+            if pinned >> k & 1 == 1 && placed < cap {
+                placed += 1;
                 self.key_grid.remove(key);
+                key.set_size_request(SHUTTER_W as i32, -1);
                 self.pin_strip.append(key);
             }
         }
         self.key_grid.set_visible(false);
         self.pin_strip.set_visible(true);
-        self.thumb_box.set_visible(false);
+        self.shutter_row.set_orientation(gtk::Orientation::Vertical);
+        self.shutter_row.set_spacing(10);
+        self.shutter_fill.set_visible(false);
+        self.thumb.set_pixel_size(SHUTTER_W as i32);
     }
 
     fn leave_compact(&self) {
@@ -3246,12 +3269,16 @@ impl App {
         for (k, key) in self.keys.iter().enumerate() {
             if key.parent().is_some_and(|p| p == *self.pin_strip.upcast_ref::<gtk::Widget>()) {
                 self.pin_strip.remove(key);
+                key.set_size_request(-1, -1);
                 self.key_grid.attach(key, (k % 3) as i32, (k / 3) as i32, 1, 1);
             }
         }
         self.pin_strip.set_visible(false);
         self.key_grid.set_visible(true);
-        self.thumb_box.set_visible(true);
+        self.shutter_row.set_orientation(gtk::Orientation::Horizontal);
+        self.shutter_row.set_spacing(0);
+        self.shutter_fill.set_visible(true);
+        self.thumb.set_pixel_size(72);
     }
 
     // the layout now: the controls out or stowed (stow_t), and the overheating warning's room
@@ -3292,6 +3319,12 @@ impl App {
     }
 
     fn toggle_pin(self: &Rc<Self>, k: usize) {
+        let (pinned, cap) = (self.st.borrow().pinned, self.pin_cap());
+        if pinned >> k & 1 == 0 && pinned.count_ones() as usize >= cap {
+            self.buzz(30);
+            self.show_pill(icons::LOCK, &format!("No room for more than {cap} pinned keys"), 3);
+            return;
+        }
         let now = {
             let mut st = self.st.borrow_mut();
             st.pinned ^= 1 << k;
@@ -3914,7 +3947,7 @@ fn build(gapp: &gtk::Application) {
     shutter_row.append(&shutter);
     // the pinned keys, together, while the controls are stowed
     let pin_strip = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    pin_strip.set_halign(gtk::Align::End);
+    pin_strip.set_halign(gtk::Align::Center);
     pin_strip.set_visible(false);
     right.append(&key_grid);
     right.append(&pin_strip);
@@ -4364,6 +4397,8 @@ fn build(gapp: &gtk::Application) {
         frame: frame.clone(),
         right: right.clone(),
         thumb_box: thumb_box.clone(),
+        shutter_row: shutter_row.clone(),
+        shutter_fill: shutter_fill.clone(),
         stow_t: Cell::new(0.0),
         stow_anim: RefCell::new(None),
         compact: Cell::new(false),
@@ -4580,6 +4615,15 @@ fn build(gapp: &gtk::Application) {
         }
     });
     root.add_controller(edge);
+    // (developer) SIGWINCH: a pill and an alert, to see them on the device
+    {
+        let a = app.clone();
+        glib::unix_signal_add_local(libc::SIGWINCH, move || {
+            a.show_pill(icons::FLASH_AUTO, "Flash auto", 20);
+            a.show_alert("demo", icons::HAND_WAVE, "Hold steady", "The shutter is slow enough that a shaky hand will blur the photo.", 20);
+            glib::ControlFlow::Continue
+        });
+    }
     // the mode key opens its picker; a row sets the mode. The close key closes the app as the
     // window does
     let a = app.clone();
