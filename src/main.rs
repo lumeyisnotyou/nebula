@@ -12,6 +12,7 @@ mod canvas;
 mod ccb;
 mod dev;
 mod dots;
+mod fit;
 mod geo;
 mod gyro;
 mod haptics;
@@ -4233,7 +4234,8 @@ fn build(gapp: &gtk::Application) {
     root.add_overlay(&battery_screen);
     root.add_overlay(&hot_screen);
     root.add_overlay(&settings_page);
-    window.set_child(Some(&root));
+    // laid out at the design size and scaled to the screen (fit.rs): 250 % leaves less logical room
+    window.set_child(Some(&fit::Fit::wrap(&root)));
 
     let (stage_tx, stage_rx) = mpsc::channel();
     // control writes that can wait for the driver (an AF run holds it for seconds)
