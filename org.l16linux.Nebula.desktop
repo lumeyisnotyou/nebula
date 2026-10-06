@@ -7,3 +7,8 @@ Icon=nebula
 Categories=Graphics;Photography;
 X-L16-Camera=true
 X-Purism-FormFactor=Workstation;Mobile;
+Actions=Locked;
+
+[Desktop Action Locked]
+Name=Locked camera
+Exec=nebula --locked

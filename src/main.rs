@@ -2555,6 +2555,15 @@ impl App {
             let st = self.st.borrow();
             (st.asleep, st.busy || st.saving > 0 || st.counting)
         };
+        // over the lock the camera does not wait for the screen to come back: it closes, and
+        // the lock screen is what is there (photos on their way finish first)
+        if locked() && !screen && !busy {
+            eprintln!("nebula: locked and the screen is off: closing");
+            if let Some(w) = self.view.root().and_downcast::<gtk::Window>() {
+                w.close();
+            }
+            return;
+        }
         if !on && !asleep && !busy {
             eprintln!("nebula: sleep (screen {screen}, away {away}): stopping");
             self.st.borrow_mut().asleep = true;
@@ -3859,7 +3868,9 @@ fn build(gapp: &gtk::Application) {
         #[cfg(not(target_os = "linux"))]
         let _ = newest;
     });
-    thumb_box.add_controller(open_gallery);
+    if !locked() {
+        thumb_box.add_controller(open_gallery);
+    }
     let dial = |size: i32| {
         let d = Canvas::new();
         d.set_size_request(size, size);
@@ -4234,6 +4245,20 @@ fn build(gapp: &gtk::Application) {
     root.add_overlay(&battery_screen);
     root.add_overlay(&hot_screen);
     root.add_overlay(&settings_page);
+    // over the lock the system panel is gone: a close button is the way out (besides phosh's
+    // exit swipe and the power button)
+    if locked() {
+        let x = gtk::Button::new();
+        x.set_child(Some(&icons::label(icons::CLOSE)));
+        x.add_css_class("key");
+        x.set_halign(gtk::Align::Start);
+        x.set_valign(gtk::Align::Start);
+        x.set_margin_start(10);
+        x.set_margin_top(10);
+        let w = window.clone();
+        x.connect_clicked(move |_| w.close());
+        root.add_overlay(&x);
+    }
     // laid out at the design size and scaled to the screen (fit.rs): 250 % leaves less logical room
     window.set_child(Some(&fit::Fit::wrap(&root)));
 
@@ -4662,7 +4687,9 @@ fn build(gapp: &gtk::Application) {
             a.show_sidebar(true);
         }
     });
-    root.add_controller(edge);
+    if !locked() {
+        root.add_controller(edge);
+    }
     // the sidebar goes with a tap on the dimmed layer, or a swipe back to the left
     let tap = gtk::GestureClick::new();
     let a = app.clone();
@@ -5059,6 +5086,15 @@ fn take_camera() -> bool {
 // the window closed and the streams stopping
 static CLOSING: AtomicBool = AtomicBool::new(false);
 
+// started over the lock screen (`nebula --locked`): shoot only. No gallery, no settings, no
+// system panel; a close button, and the app closes when the screen blanks. The thumbnail is
+// only ever this session's last frame (the preview as it was at the shutter), never a stored photo.
+static LOCKED: AtomicBool = AtomicBool::new(false);
+
+fn locked() -> bool {
+    LOCKED.load(Ordering::Relaxed)
+}
+
 fn main() -> glib::ExitCode {
     // started from the app grid, the output went to the console: to a file instead
     // (~/.cache/nebula.log; appended to, as a launch that only hands over to a running
@@ -5076,14 +5112,21 @@ fn main() -> glib::ExitCode {
             }
         }
     }
-    eprintln!("nebula: started (pid {})", std::process::id());
+    let args: Vec<String> = std::env::args().filter(|a| a != "--locked").collect();
+    if args.len() != std::env::args().count() {
+        LOCKED.store(true, Ordering::Relaxed);
+    }
+    eprintln!("nebula: started (pid {}{})", std::process::id(), if locked() { ", locked" } else { "" });
     // GTK redraws the whole window each frame: redrawing only what changed (the preview)
     // left the badges over it as flickering black bars
     if std::env::var_os("GSK_DEBUG").is_none() {
         std::env::set_var("GSK_DEBUG", "full-redraw");
     }
     gst::init().expect("gstreamer");
-    let app = gtk::Application::builder().application_id("org.l16linux.Nebula").build();
+    // locked: a process of its own, never a hand-over to a running camera (that one has the
+    // gallery and the settings); it waits for the camera when that is held
+    let flags = if locked() { gtk::gio::ApplicationFlags::NON_UNIQUE } else { gtk::gio::ApplicationFlags::empty() };
+    let app = gtk::Application::builder().application_id("org.l16linux.Nebula").flags(flags).build();
     // launched again while running (the gallery's camera button): back to the window there is
     app.connect_activate(|app| {
         // logged: an activation while the app was closing (its streams stopping) left the
@@ -5098,5 +5141,5 @@ fn main() -> glib::ExitCode {
             None => build(app),
         }
     });
-    app.run()
+    app.run_with_args(&args)
 }
