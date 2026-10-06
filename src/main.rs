@@ -4966,12 +4966,69 @@ fn build(gapp: &gtk::Application) {
 
 // While in front, a marker in the runtime directory: the touch strip is the camera's zoom
 // then, and light-lfc-strip-volume leaves it alone (in the overview it is volume again)
+// While the camera is in front it wants the touch strip (zoom), and says so to
+// light-lfc-strip-volume (the strip as volume keys): a claim, a file named for the app in
+// l16-strip/ in the runtime directory holding its PID, which the service ignores once the process
+// is gone (so a crash can't keep the strip). l16-camera.front is the older marker, kept for it.
 fn front_marker(front: bool) {
-    let path = glib::user_runtime_dir().join("l16-camera.front");
+    write_front_marker(&glib::user_runtime_dir(), front);
+}
+
+fn write_front_marker(dir: &std::path::Path, front: bool) {
+    let legacy = dir.join("l16-camera.front");
+    let claim = dir.join("l16-strip").join("nebula");
     if front {
-        let _ = std::fs::write(&path, b"");
+        let _ = std::fs::write(&legacy, b"");
+        let _ = std::fs::create_dir_all(dir.join("l16-strip"));
+        let _ = std::fs::write(&claim, std::process::id().to_string());
     } else {
-        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&legacy);
+        let _ = std::fs::remove_file(&claim);
+    }
+}
+
+#[cfg(test)]
+mod strip_claim_tests {
+    use super::*;
+
+    fn temp() -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("nebula-strip-test-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn in_front_it_claims_the_strip_with_its_pid() {
+        let d = temp();
+        write_front_marker(&d, true);
+        let pid = std::fs::read_to_string(d.join("l16-strip").join("nebula")).unwrap();
+        assert_eq!(pid, std::process::id().to_string());
+        assert!(d.join("l16-camera.front").exists(), "the older marker stays for the older service");
+    }
+
+    #[test]
+    fn leaving_the_front_lets_the_strip_go() {
+        let d = temp();
+        write_front_marker(&d, true);
+        write_front_marker(&d, false);
+        assert!(!d.join("l16-strip").join("nebula").exists());
+        assert!(!d.join("l16-camera.front").exists());
+    }
+
+    #[test]
+    fn letting_go_without_having_claimed_is_harmless() {
+        let d = temp();
+        write_front_marker(&d, false);
+        assert!(!d.join("l16-strip").join("nebula").exists());
+    }
+
+    #[test]
+    fn claiming_twice_keeps_one_claim() {
+        let d = temp();
+        write_front_marker(&d, true);
+        write_front_marker(&d, true);
+        assert_eq!(std::fs::read_dir(d.join("l16-strip")).unwrap().count(), 1);
     }
 }
 
