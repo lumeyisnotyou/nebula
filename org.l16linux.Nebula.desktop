@@ -5,4 +5,5 @@ Comment=Take photos with the Light L16's camera modules
 Exec=nebula
 Icon=nebula
 Categories=Graphics;Photography;
+X-L16-Camera=true
 X-Purism-FormFactor=Workstation;Mobile;
