@@ -32,8 +32,11 @@ pub fn install() {
     for (name, bytes) in FONTS {
         let path = dir.join(name);
         if std::fs::metadata(&path).map_or(true, |m| m.len() != bytes.len() as u64) {
-            if let Err(e) = std::fs::write(&path, bytes) {
+            // written aside and renamed: two instances (locked and not) can start together
+            let tmp = dir.join(format!("{name}.{}.tmp", std::process::id()));
+            if let Err(e) = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, &path)) {
                 eprintln!("nebula: fonts: {}: {e}", path.display());
+                let _ = std::fs::remove_file(&tmp);
                 continue;
             }
         }

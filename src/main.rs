@@ -132,6 +132,8 @@ const RESERVE_STOW: f64 = STOW_W + 10.0 + 8.0;
 const LENS_ROOM: f64 = 70.0;
 // the room the overheating warning takes under the lens strip while it shows
 const THERMAL_ROOM: f64 = 40.0;
+// how many of this session's shots the locked review keeps
+const REVIEW_MAX: usize = 50;
 // the controls-edge pill's distance from the screen's right edge: clear of the first key (the column,
 // the margin it has, and a gap), with the controls out and stowed
 const PILL_FULL: f64 = RIGHT_W + 16.0;
@@ -1923,7 +1925,12 @@ impl App {
         self.thumb.set_paintable(self.preview_still(88.0, 66.0).as_ref());
         if locked() {
             if let Some(t) = self.preview_still(640.0, 480.0) {
-                self.review.borrow_mut().push(t);
+                // about 1.2 MB a shot, held in RAM: the last 50
+                let mut shots = self.review.borrow_mut();
+                shots.push(t);
+                if shots.len() > REVIEW_MAX {
+                    shots.remove(0);
+                }
             }
         }
         if burst > 1 {
