@@ -3,6 +3,7 @@
 // through) is a list of checkboxes. A change is applied at once (App::setting_changed), and the
 // pane is built again whenever its section is shown.
 
+use crate::canvas::Canvas;
 use crate::{App, State};
 use gtk::prelude::*;
 use std::rc::Rc;
@@ -14,6 +15,8 @@ pub enum Row {
     Check { title: &'static str, sub: &'static str, get: Get, set: Set },
     Radio { title: &'static str, sub: &'static str, options: &'static [&'static str], get: fn(&State) -> usize, set: fn(&mut State, usize) },
     Checks { title: &'static str, sub: &'static str, items: &'static [(&'static str, Get, Set)] },
+    // a choice of colours (the accent), shown as dots: names would not fit in a row
+    Swatches { title: &'static str, sub: &'static str, get: fn(&State) -> usize, set: fn(&mut State, usize) },
 }
 
 pub struct Section {
@@ -22,8 +25,6 @@ pub struct Section {
     // the About section: the app's and the system's versions, not rows
     pub about: bool,
 }
-
-pub const ACCENT_NAMES: &[&str] = &["Blue", "Orange", "Green", "Pink", "Amber", "White"];
 
 pub static SECTIONS: &[Section] = &[
     Section {
@@ -70,10 +71,9 @@ pub static SECTIONS: &[Section] = &[
         name: "Display",
         about: false,
         rows: &[
-            Row::Radio {
+            Row::Swatches {
                 title: "Accent colour",
                 sub: "The colour of what you have set: values, selected keys, the dials",
-                options: ACCENT_NAMES,
                 get: |s| s.accent,
                 set: |s, v| s.accent = v,
             },
@@ -147,7 +147,7 @@ pub fn fill_pane(app: &Rc<App>, pane: &gtk::Box, index: usize) {
         pane.remove(&c);
     }
     let section = &SECTIONS[index];
-    let heading = gtk::Label::new(Some(&section.name.to_uppercase()));
+    let heading = gtk::Label::new(Some(section.name));
     heading.add_css_class("pane-title");
     heading.set_xalign(0.0);
     pane.append(&heading);
@@ -200,6 +200,46 @@ pub fn fill_pane(app: &Rc<App>, pane: &gtk::Box, index: usize) {
                         }
                     });
                     line.append(&r);
+                }
+                card.append(&line);
+            }
+            Row::Swatches { title, sub, get, set } => {
+                card.append(&text_box(title, sub));
+                let line = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+                line.add_css_class("choices");
+                let chosen = Rc::new(std::cell::Cell::new(get(&app.st.borrow())));
+                let dots: Rc<std::cell::RefCell<Vec<Canvas>>> = Rc::new(std::cell::RefCell::new(Vec::new()));
+                for (k, (name, _, rgb)) in crate::ACCENTS.iter().enumerate() {
+                    let c = Canvas::new();
+                    c.set_size_request(48, 48);
+                    c.set_tooltip_text(Some(name));
+                    let (shown, rgb) = (chosen.clone(), *rgb);
+                    c.set_draw_func(move |_, cr, w, h| {
+                        let (cx, cy, r) = (w as f64 / 2.0, h as f64 / 2.0, w.min(h) as f64 / 2.0);
+                        // the colour, and round the chosen one a ring with a gap
+                        cr.set_source_rgb(rgb.0, rgb.1, rgb.2);
+                        cr.arc(cx, cy, r - 7.0, 0.0, std::f64::consts::TAU);
+                        let _ = cr.fill();
+                        if shown.get() == k {
+                            cr.set_source_rgba(0.95, 0.95, 0.93, 1.0);
+                            cr.set_line_width(2.5);
+                            cr.arc(cx, cy, r - 2.0, 0.0, std::f64::consts::TAU);
+                            let _ = cr.stroke();
+                        }
+                    });
+                    let (a, set, chosen2, dots2) = (app.clone(), *set, chosen.clone(), dots.clone());
+                    let tap = gtk::GestureClick::new();
+                    tap.connect_released(move |_, _, _, _| {
+                        chosen2.set(k);
+                        set(&mut a.st.borrow_mut(), k);
+                        a.setting_changed();
+                        for d in dots2.borrow().iter() {
+                            d.queue_draw();
+                        }
+                    });
+                    c.add_controller(tap);
+                    dots.borrow_mut().push(c.clone());
+                    line.append(&c);
                 }
                 card.append(&line);
             }

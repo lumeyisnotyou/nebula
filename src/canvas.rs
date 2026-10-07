@@ -24,6 +24,12 @@ mod imp {
         // what the texture was made for: width, height, scale
         pub made_for: Cell<(i32, i32, f64)>,
         pub dirty: Cell<bool>,
+        // while the widget is being resized (an animation) the last texture is drawn stretched, and
+        // the drawing is made again for the new size once it has stayed put: a Canvas the size of the
+        // preview made again on every frame cost 30-80 ms of each (the stow animation hitched)
+        pub resized_at: Cell<Option<std::time::Instant>>,
+        pub settle: RefCell<Option<glib::SourceId>>,
+        pub force: Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -46,7 +52,32 @@ mod imp {
                 .native()
                 .and_then(|n| n.surface())
                 .map_or(widget.scale_factor() as f64, |s| s.scale());
-            if self.dirty.replace(false) || self.made_for.get() != (w, h, scale) {
+            let mut render = self.dirty.replace(false) || self.force.replace(false);
+            if self.made_for.get() != (w, h, scale) {
+                if self.texture.borrow().is_none() {
+                    render = true;
+                } else {
+                    self.resized_at.set(Some(std::time::Instant::now()));
+                    if self.settle.borrow().is_none() {
+                        let weak = widget.downgrade();
+                        let id = glib::timeout_add_local(std::time::Duration::from_millis(60), move || {
+                            let Some(c) = weak.upgrade() else { return glib::ControlFlow::Break };
+                            let imp = c.imp();
+                            let still = imp.resized_at.get().is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(100));
+                            if still {
+                                return glib::ControlFlow::Continue;
+                            }
+                            imp.settle.take();
+                            imp.force.set(true);
+                            // the texture is made for the size as it is now on the next snapshot
+                            WidgetExt::queue_draw(&c);
+                            glib::ControlFlow::Break
+                        });
+                        self.settle.replace(Some(id));
+                    }
+                }
+            }
+            if render {
                 self.made_for.set((w, h, scale));
                 self.texture.replace(self.render(w, h, scale));
             }

@@ -40,6 +40,10 @@ pub const MOON: char = '\u{f0594}'; // weather-night: stock's low-light assist (
 pub const ASSIST: char = '\u{f02f1}';
 pub const ASSIST_OFF: char = '\u{f02f2}';
 // the modes (auto-fix, camera-iris, camera-timer, tune), metering (centre, spot, matrix), geotag, preset
+// the dials: ISO (grain), shutter (a camera with a timer), exposure compensation (plus/minus)
+pub const DIAL_ISO: char = '\u{f0d7c}';
+pub const DIAL_SHUTTER: char = '\u{f0109}';
+pub const DIAL_EV: char = '\u{f14c9}';
 pub const MODES: [char; 4] = ['\u{f0068}', '\u{f0104}', '\u{f0109}', '\u{f062e}'];
 pub const METER: [char; 3] = ['\u{f07a2}', '\u{f07a5}', '\u{f07a3}'];
 pub const GEO: char = '\u{f034e}';

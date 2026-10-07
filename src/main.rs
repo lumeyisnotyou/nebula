@@ -37,7 +37,7 @@ use std::f64::consts::PI;
 use std::path::PathBuf;
 use std::process::Command;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering, AtomicU64};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -137,7 +137,8 @@ const HIST_BINS: usize = 64;
 
 const CSS: &str = "
 window.camera { background: #000; color: #f2f2ee; font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; }
-.mono, .set-value, .countdown, .burst-count { font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; }
+.mono, .set-value, .countdown, .burst-count, .bubble-title { font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; }
+label, button { text-transform: lowercase; }
 .flyout { background: #101012; border: 1px solid alpha(@accent, 0.55); border-radius: 10px; }
 .encoder.held { border-color: alpha(@accent, 0.8); background: #17171a; }
 .encoder { background: #121214; border: 1px solid rgba(255,255,255,0.09); border-radius: 10px;
@@ -148,7 +149,6 @@ button.flat-white { background: none; border: none; box-shadow: none; outline: n
 button.flat-white:active { background: rgba(255,255,255,0.10); }
 .key { background: #151517; border: 1px solid rgba(255,255,255,0.09); box-shadow: none; outline: none;
     color: rgba(242,242,238,0.82); padding: 0; border-radius: 10px; min-width: 70px; min-height: 74px;
-    font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
     transition: background 200ms ease, color 200ms ease, border-color 220ms ease, opacity 220ms ease, transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .key:active { background: #2c2c32; transform: scale(0.93); }
 .key.on { color: @accent; background: alpha(@accent, 0.13); border-color: alpha(@accent, 0.75); }
@@ -189,7 +189,7 @@ window.rot-ccw .spin { transform: rotate(-90deg); }
 .pick-row:active { background: rgba(255,255,255,0.14); transform: scale(0.97); }
 .pick-row.on { background: @accent; color: #0b0b0c; }
 .bubble { background: #141416; border: 1px solid rgba(255,255,255,0.18); border-radius: 12px; padding: 12px 16px; }
-.bubble-title { color: @accent; font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 17px; font-weight: 700; }
+.bubble-title { color: @accent; font-size: 17px; font-weight: 700; }
 .bubble-text { color: rgba(242,242,238,0.82); font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 15px; }
 .enc-wrap { transition: opacity 240ms ease, transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .enc-wrap.gone { opacity: 0; transform: translateY(32px); }
@@ -202,26 +202,26 @@ window.rot-ccw .spin { transform: rotate(-90deg); }
 .sidebar { background: #101012; border-right: 1px solid rgba(255,255,255,0.12); padding: 22px 18px;
     transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .sidebar.side-hidden { transform: translateX(-340px); }
-.side-title { color: rgba(242,242,238,0.5); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 13px;
+.side-title { color: rgba(242,242,238,0.5); font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 13px;
     font-weight: 700; letter-spacing: 3px; margin-bottom: 8px; }
 .side-row { background: none; border: none; box-shadow: none; outline: none; color: #f2f2ee; border-radius: 10px;
     min-height: 56px; padding: 0 12px; font-size: 19px; font-weight: 600; }
 .side-row:active { background: rgba(255,255,255,0.14); transform: scale(0.98); }
-.side-head { color: rgba(242,242,238,0.45); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 12px;
+.side-head { color: rgba(242,242,238,0.45); font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 12px;
     font-weight: 700; letter-spacing: 2px; margin-top: 18px; margin-bottom: 4px; padding-left: 12px; }
 .side-quick { padding-left: 12px; }
-.side-about { color: rgba(242,242,238,0.42); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 12px; padding-left: 12px; }
+.side-about { color: rgba(242,242,238,0.42); font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 12px; padding-left: 12px; }
 .settings { background: #000; }
 .nav { background: #0b0b0c; }
 .nav row { padding: 20px 26px; background: none; color: rgba(242,242,238,0.7); font-size: 19px; font-weight: 600;
     border-bottom: 1px solid rgba(255,255,255,0.06); }
 .nav row:selected { background: alpha(@accent, 0.14); color: @accent; }
 .pane { padding: 18px 34px 34px 34px; }
-.pane-title { color: rgba(242,242,238,0.45); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 12px;
+.pane-title { color: rgba(242,242,238,0.45); font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 12px;
     font-weight: 700; letter-spacing: 3px; margin-bottom: 8px; }
 .pane-row { padding: 16px 0; border-bottom: 1px solid rgba(255,255,255,0.08); }
 .choices { margin-top: 2px; }
-.about-line { color: rgba(242,242,238,0.6); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 15px; margin-top: 6px; }
+.about-line { color: rgba(242,242,238,0.6); font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 15px; margin-top: 6px; }
 .check-label { color: #f2f2ee; font-size: 17px; font-weight: 600; }
 checkbutton { padding: 6px 0; }
 checkbutton check { margin-right: 12px; min-width: 24px; min-height: 24px; border-radius: 7px; background: #17171a;
@@ -664,6 +664,8 @@ struct App {
     stow_anim: RefCell<Option<gtk::TickCallbackId>>,
     compact: Cell<bool>,
     stowed: Cell<bool>,
+    // when the settings page was opened (its slide-in is not the time to stop the preview)
+    settings_at: Cell<Option<Instant>>,
     picker_turn: Rotator,
     picker_card: gtk::Box,
     picker_rows: Vec<gtk::Button>,
@@ -822,8 +824,22 @@ fn module_for(zoom: f64) -> usize {
 // (through Pango, which falls back to other fonts for glyphs like ⅓ that cairo's own text
 // drew as boxes)
 fn text(cr: &cairo::Context, s: &str, x: f64, y: f64, size: f64, align: f64) {
+    text_in(cr, "Adwaita Mono, Droid Sans Mono, Monospace Bold", s, x, y, size, align);
+}
+
+// words, in the sans (digits are in the mono: `text`)
+fn text_sans(cr: &cairo::Context, s: &str, x: f64, y: f64, size: f64, align: f64) {
+    text_in(cr, "Adwaita Sans, Droid Sans, Sans Bold", s, x, y, size, align);
+}
+
+// an icon (the Nerd symbols font), centred on (x, y)
+fn icon_at(cr: &cairo::Context, icon: char, x: f64, y: f64, size: f64) {
+    text_in(cr, icons::FAMILY, &icon.to_string(), x, y, size, 0.5);
+}
+
+fn text_in(cr: &cairo::Context, family: &str, s: &str, x: f64, y: f64, size: f64, align: f64) {
     let layout = pangocairo::functions::create_layout(cr);
-    let mut font = gtk::pango::FontDescription::from_string("Adwaita Mono, Droid Sans Mono, Monospace Bold");
+    let mut font = gtk::pango::FontDescription::from_string(family);
     font.set_absolute_size(size * TEXT_SCALE * gtk::pango::SCALE as f64);
     layout.set_font_description(Some(&font));
     layout.set_text(s);
@@ -1170,8 +1186,9 @@ impl App {
         }
         // the grid and the histogram: only when switched (the histogram's updates redraw it)
         if self.marks_grid.replace(grid) != grid {
-            self.marks.set_visible(grid & 0xf != 0);
-            self.marks.queue_draw();
+            // the grid is drawn by the preview itself (zoomview.rs); the marks canvas is not shown
+            self.marks.set_visible(false);
+            self.view.set_grid(grid & 0xf);
             self.hist_area.set_visible(grid & 0x10 != 0);
             self.hist_area.queue_draw();
         }
@@ -2456,7 +2473,14 @@ impl App {
             let st = self.st.borrow();
             (st.histogram, st.asleep)
         };
-        if show && !asleep {
+        // The histogram reads the frame back from the GPU and bins it, then draws it again: 5 times a
+        // second is plenty, and not while the controls are moving or the settings are open (it
+        // was 10-20 ms of every frame there)
+        static HIST_LAST: AtomicU64 = AtomicU64::new(0);
+        let now = glib::monotonic_time() as u64;
+        let busy = self.stow_anim.borrow().is_some() || self.settings_page.is_visible();
+        if show && !asleep && !busy && now.saturating_sub(HIST_LAST.load(Ordering::Relaxed)) >= 200_000 {
+            HIST_LAST.store(now, Ordering::Relaxed);
             self.update_histogram();
             self.hist_area.queue_draw();
         }
@@ -2543,7 +2567,12 @@ impl App {
             .map_or(true, |s| s.trim() == "On");
         let front = self.view.root().and_downcast::<gtk::Window>().map_or(true, |w| w.is_active());
         self.hold_front(front);
-        let seen = front && !self.settings_page.is_visible();
+        // the settings page counts as in front once it has slid in (the preview is stopped then,
+        // not in the middle of the slide: that was a hitch) and as gone as soon as it starts to
+        // slide out (the preview starts again behind the slide, not after it)
+        let settings_open = self.settings_page.is_visible() && !self.settings_page.has_css_class("page-off");
+        let settings_settled = settings_open && self.settings_at.get().is_some_and(|t| t.elapsed() >= Duration::from_millis(450));
+        let seen = front && !settings_open;
         let unseen_since = {
             let mut st = self.st.borrow_mut();
             if seen {
@@ -2555,7 +2584,7 @@ impl App {
         };
         let cooling = self.st.borrow().thermal_pause_until.is_some_and(|t| Instant::now() < t);
         let away = unseen_since.is_some_and(|t| t.elapsed() >= Duration::from_secs(1))
-            || (!seen && self.settings_page.is_visible())
+            || settings_settled
             || cooling;
         let on = screen && !away;
         let was_off = std::mem::replace(&mut self.st.borrow_mut().screen_off, !screen);
@@ -2897,9 +2926,9 @@ impl App {
         cr.select_font_face("Adwaita Mono", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
         let (lo, hi) = (share(0..HIST_BINS / 8), share(HIST_BINS - HIST_BINS / 8..HIST_BINS));
         cr.set_source_rgba(1.0, 1.0, 1.0, 0.55);
-        text(cr, &format!("SHD {lo:.0}%"), px, y0 + bh - 8.0, 10.0, 0.0);
+        text(cr, &format!("shd {lo:.0}%"), px, y0 + bh - 8.0, 10.0, 0.0);
         cr.set_source_rgba(1.0, 1.0, 1.0, 0.55);
-        text(cr, &format!("HLT {hi:.0}%"), px + pw, y0 + bh - 8.0, 10.0, 1.0);
+        text(cr, &format!("hlt {hi:.0}%"), px + pw, y0 + bh - 8.0, 10.0, 1.0);
     }
 
     fn draw_marks(&self, cr: &cairo::Context, w: f64, h: f64) {
@@ -3132,19 +3161,26 @@ impl App {
         if self.stowed.replace(on) == on {
             return;
         }
+        self.trace_frames(if on { "stow" } else { "unstow" });
+        let t = Instant::now();
         self.buzz(10);
+        eprintln!("nebula: buzz {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
         if on {
             self.apply_stow();
             self.show_pill(icons::CHEVRON_RIGHT, "Controls hidden: swipe left to bring them back", 3);
             let a = self.clone();
             glib::timeout_add_local_once(Duration::from_millis(230), move || {
                 if a.stowed.get() {
+                    let t = Instant::now();
                     a.enter_compact();
+                    eprintln!("nebula: enter_compact {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
                     a.animate_deck(1.0);
                 }
             });
         } else {
+            let t = Instant::now();
             self.leave_compact();
+            eprintln!("nebula: leave_compact {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
             self.apply_stow();
             self.animate_deck(0.0);
         }
@@ -3204,6 +3240,60 @@ impl App {
         self.thumb.set_pixel_size(72);
     }
 
+    // frames slower than 24 ms in the next 1.3 s are logged: where the hitches are when a page
+    // opens or the controls move (nebula.log: "slow frame")
+    fn trace_frames(&self, label: &'static str) {
+        let t0 = Instant::now();
+        let last = Cell::new(0i64);
+        // the frame clock's phases of a slow frame (update, layout, paint): where the time goes
+        let marks: Rc<RefCell<Vec<(&'static str, Instant)>>> = Rc::new(RefCell::new(Vec::new()));
+        let mut ids = Vec::new();
+        let fc = self.right.frame_clock();
+        if let Some(fc) = &fc {
+            let m = marks.clone();
+            ids.push(fc.connect_before_paint(move |_| {
+                m.borrow_mut().clear();
+                m.borrow_mut().push(("start", Instant::now()));
+            }));
+            let m = marks.clone();
+            ids.push(fc.connect_update(move |_| m.borrow_mut().push(("update", Instant::now()))));
+            let m = marks.clone();
+            ids.push(fc.connect_layout(move |_| m.borrow_mut().push(("layout", Instant::now()))));
+            let m = marks.clone();
+            ids.push(fc.connect_paint(move |_| m.borrow_mut().push(("paint", Instant::now()))));
+            let m = marks.clone();
+            ids.push(fc.connect_after_paint(move |_| {
+                let mut v = m.borrow_mut();
+                v.push(("end", Instant::now()));
+                if v.len() > 1 && v[v.len() - 1].1 - v[0].1 > Duration::from_millis(30) {
+                    let parts: Vec<String> = v
+                        .windows(2)
+                        .map(|w| format!("{} {:.0}", w[0].0, (w[1].1 - w[0].1).as_secs_f64() * 1000.0))
+                        .collect();
+                    eprintln!("nebula: slow frame phases ({label}): {} ms", parts.join(", "));
+                }
+            }));
+        }
+        let ids = RefCell::new(Some(ids));
+        self.right.add_tick_callback(move |_, clock| {
+            let now = clock.frame_time();
+            let before = last.replace(now);
+            if before != 0 && now - before > 45_000 {
+                eprintln!("nebula: slow frame ({label}): {:.0} ms at +{:.0} ms", (now - before) as f64 / 1000.0, t0.elapsed().as_secs_f64() * 1000.0);
+            }
+            if t0.elapsed() > Duration::from_millis(1300) {
+                if let (Some(fc), Some(ids)) = (&fc, ids.borrow_mut().take()) {
+                    for id in ids {
+                        fc.disconnect(id);
+                    }
+                }
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+    }
+
     // the layout now: the controls out or stowed (stow_t), and the overheating warning's room
     fn apply_deck(&self) {
         let t = self.stow_t.get();
@@ -3214,6 +3304,10 @@ impl App {
         self.centre.set_margin_end(lerp(RESERVE_FULL, RESERVE_STOW) as i32);
         self.frame.set_margin_bottom((lerp(LENS_ROOM, 0.0) + warm) as i32);
         self.zoom_pill.set_margin_bottom((10.0 + warm) as i32);
+        // a zoom flyout showing follows the strip as it moves
+        if self.flyout_at.get() == 3 && !self.flyout_turn.has_css_class("off") {
+            self.place_flyout(3);
+        }
     }
 
     // there in about a quarter of a second, on a smooth curve
@@ -3345,23 +3439,39 @@ impl App {
 
     // the settings page in (it fades and slides in) or out; hidden after its outro
     fn open_settings(self: &Rc<Self>) {
+        self.trace_frames("settings open");
+        let t = Instant::now();
         self.fill_settings();
+        let fill = t.elapsed();
         self.settings_page.set_visible(true);
         let a = self.clone();
         glib::timeout_add_local_once(Duration::from_millis(30), move || set_class(&a.settings_page, "page-off", false));
-        self.follow_screen();
+        self.settings_at.set(Some(Instant::now()));
+        // the preview stops once the page is in
+        let a = self.clone();
+        glib::timeout_add_local_once(Duration::from_millis(480), move || {
+            let t = Instant::now();
+            a.follow_screen();
+            eprintln!("nebula: settings in: follow_screen {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
+        });
+        eprintln!("nebula: open settings: fill {:.0} ms", fill.as_secs_f64() * 1000.0);
     }
 
     fn close_settings(self: &Rc<Self>) {
         if !self.settings_page.is_visible() {
             return;
         }
+        self.trace_frames("settings close");
         set_class(&self.settings_page, "page-off", true);
+        // the preview starts again now, behind the slide-out
+        self.follow_screen();
         let a = self.clone();
         glib::timeout_add_local_once(Duration::from_millis(260), move || {
             if a.settings_page.has_css_class("page-off") {
                 a.settings_page.set_visible(false);
+                let t = Instant::now();
                 a.follow_screen();
+                eprintln!("nebula: close settings: follow_screen {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
             }
         });
     }
@@ -3447,21 +3557,21 @@ impl App {
             cr.arc(x, y, 1.7, 0.0, 2.0 * PI);
             let _ = cr.fill();
         }
-        cr.select_font_face("Adwaita Mono", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
+        // an icon for the dial, its name small under it (lowercase)
         cr.set_source_rgba(on.0, on.1, on.2, if active { 1.0 } else { 0.7 });
-        text_at(cr, name, cx, cy, if name.len() > 4 { 11.0 } else { 14.0 });
+        icon_at(cr, [icons::DIAL_ISO, icons::DIAL_SHUTTER, icons::DIAL_EV][dial_index(dial)], cx, cy - 5.0, 24.0);
+        text_sans(cr, &name.to_lowercase(), cx, cy + 13.0, 7.0, 0.5);
         if !active {
             cr.set_source_rgba(1.0, 1.0, 1.0, 0.45);
-            text(cr, "AUTO", w - 10.0, 14.0, 9.0, 1.0);
+            text_sans(cr, "auto", w - 10.0, 14.0, 9.0, 1.0);
         }
         self.enc_roll[dial_index(dial)].draw(cr, &value, [4, 6, 4][dial_index(dial)], 14.0, cy + r + 14.0, 3.0, on);
     }
 
     // the flyout: what is being set, large, in dot matrix, left-justified in its cells
     fn draw_flyout(&self, cr: &cairo::Context, _w: f64, h: f64) {
-        cr.select_font_face("Adwaita Mono", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
         cr.set_source_rgba(1.0, 1.0, 1.0, 0.5);
-        text(cr, self.flyout_unit.get(), 20.0, 20.0, 14.0, 0.0);
+        text_sans(cr, &self.flyout_unit.get().to_lowercase(), 20.0, 20.0, 14.0, 0.0);
         let cells = self.flyout_cells.get();
         let pitch = 5.0;
         let top = 28.0 + (h - 28.0 - 7.0 * pitch) / 2.0 - 2.0;
@@ -3471,7 +3581,7 @@ impl App {
         let suffix = self.flyout_suffix.get();
         if !suffix.is_empty() {
             cr.set_source_rgba(1.0, 1.0, 1.0, 0.7);
-            text(cr, suffix, 20.0 + dots::cells_width(cells, pitch) + 12.0, top + 7.0 * pitch - 6.0, 18.0, 0.0);
+            text_sans(cr, &suffix.to_lowercase(), 20.0 + dots::cells_width(cells, pitch) + 12.0, top + 7.0 * pitch - 6.0, 18.0, 0.0);
         }
     }
 
@@ -3491,7 +3601,9 @@ impl App {
             (b.x() + b.width() + 10.0, b.y() + (b.height() - fh) / 2.0)
         } else {
             let Some(b) = self.view.compute_bounds(&self.root) else { return };
-            (b.x() + (b.width() - fw) / 2.0, b.y() + b.height() - fh - 16.0)
+            // with the controls hidden the zoom strip sits on the preview's foot: the flyout goes above it
+            let lift = (self.zoom_pill.height() as f32 + 10.0) * self.stow_t.get() as f32;
+            (b.x() + (b.width() - fw) / 2.0, b.y() + b.height() - fh - 16.0 - lift)
         };
         self.flyout_turn.set_margin_start(x.max(4.0) as i32);
         self.flyout_turn.set_margin_top(y.max(4.0) as i32);
@@ -4560,6 +4672,7 @@ fn build(gapp: &gtk::Application) {
         stow_anim: RefCell::new(None),
         compact: Cell::new(false),
         stowed: Cell::new(false),
+        settings_at: Cell::new(None),
         side_panel: side_panel.clone(),
         scrim: scrim.clone(),
         side_quick: side_quick.clone(),

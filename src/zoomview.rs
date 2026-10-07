@@ -24,6 +24,9 @@ mod imp {
         // focus peaking and zebras, drawn over the preview by render nodes (GPU): 0 off,
         // bit 0 peaking, bit 1 zebras
         pub assist: Cell<u8>,
+        // the composition grid: 0 off, 1 thirds, 2 the golden ratio's lines (rectangles, not a texture:
+        // nothing to draw again when the preview is resized)
+        pub grid: Cell<u8>,
         // the assist's overlay, as of its last refresh, and the timer that makes it
         pub overlay: RefCell<Option<gdk::Texture>>,
         pub overlay_timer: RefCell<Option<glib::SourceId>>,
@@ -66,6 +69,16 @@ mod imp {
             }
             snapshot.restore();
             snapshot.pop();
+            let g = self.grid.get();
+            if g != 0 {
+                let at = if g == 1 { [1.0 / 3.0, 2.0 / 3.0] } else { [0.382, 0.618] };
+                let c = gdk::RGBA::new(1.0, 1.0, 1.0, 0.4);
+                for f in at {
+                    let (x, y) = ((w * f).round() as f32, (h * f).round() as f32);
+                    snapshot.append_color(&c, &graphene::Rect::new(x, 0.0, 1.0, h as f32));
+                    snapshot.append_color(&c, &graphene::Rect::new(0.0, y, w as f32, 1.0));
+                }
+            }
         }
     }
 }
@@ -155,6 +168,12 @@ impl ZoomView {
         self.imp().next_zoom.set(None);
         self.imp().zoom.set(zoom);
         self.queue_draw();
+    }
+
+    pub fn set_grid(&self, grid: u8) {
+        if self.imp().grid.replace(grid) != grid {
+            self.queue_draw();
+        }
     }
 
     pub fn set_assist(&self, assist: u8) {
