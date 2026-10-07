@@ -2639,15 +2639,6 @@ impl App {
             let st = self.st.borrow();
             (st.asleep, st.busy || st.saving > 0 || st.counting)
         };
-        // over the lock the camera does not wait for the screen to come back: it closes, and
-        // the lock screen is what is there (photos on their way finish first)
-        if locked() && !screen && !busy {
-            eprintln!("nebula: locked and the screen is off: closing");
-            if let Some(w) = self.view.root().and_downcast::<gtk::Window>() {
-                w.close();
-            }
-            return;
-        }
         if !on && !asleep && !busy {
             eprintln!("nebula: sleep (screen {screen}, away {away}): stopping");
             self.st.borrow_mut().asleep = true;
@@ -5386,8 +5377,8 @@ fn take_camera() -> bool {
 static CLOSING: AtomicBool = AtomicBool::new(false);
 
 // started over the lock screen (`nebula --locked`): shoot only. No gallery, no settings, no
-// system panel; a close button, and the app closes when the screen blanks. The thumbnail is
-// only ever this session's last frame (the preview as it was at the shutter), never a stored photo.
+// system panel, no close button (phosh's swipe up from the bottom edge closes it). It sleeps and
+// wakes with the screen, as the camera does unlocked. The thumbnail is only ever this session's last frame (the preview as it was at the shutter), never a stored photo.
 static LOCKED: AtomicBool = AtomicBool::new(false);
 
 fn locked() -> bool {
