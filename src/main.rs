@@ -698,6 +698,9 @@ struct App {
     // a photo's view preferences for the LRI (white balance, exposure), by its directory
     photo_args: RefCell<HashMap<PathBuf, Vec<String>>>,
     settings_page: gtk::Overlay,
+    // over the lock screen (`--locked`): this session's shots, as the preview was at each shutter
+    // (in memory only; never a stored photo)
+    review: Rc<RefCell<Vec<gdk::Texture>>>,
     last_saved: RefCell<String>,
     // logind's sleep inhibitor while photos are on their way (dropped: released)
     sleep_inhibitor: RefCell<Option<std::os::fd::OwnedFd>>,
@@ -1884,6 +1887,11 @@ impl App {
             (st.zoom, BURSTS[st.burst], st.seq, st.mode == Mode::Auto && st.live_iso > 400, st.stacked)
         };
         self.thumb.set_paintable(self.preview_still(88.0, 66.0).as_ref());
+        if locked() {
+            if let Some(t) = self.preview_still(640.0, 480.0) {
+                self.review.borrow_mut().push(t);
+            }
+        }
         if burst > 1 {
             self.start_burst_screen(burst);
         } else {
@@ -4259,6 +4267,81 @@ fn build(gapp: &gtk::Application) {
         x.connect_clicked(move |_| w.close());
         root.add_overlay(&x);
     }
+    let review: Rc<RefCell<Vec<gdk::Texture>>> = Rc::new(RefCell::new(Vec::new()));
+    if locked() {
+        // this session's shots: a tap on the thumbnail opens them, newest first; a swipe or the
+        // arrows move between them; the back button returns to the camera
+        let page = gtk::Overlay::new();
+        page.add_css_class("settings");
+        page.set_visible(false);
+        let pic = gtk::Picture::new();
+        pic.set_content_fit(gtk::ContentFit::Contain);
+        page.set_child(Some(&pic));
+        let count = gtk::Label::new(None);
+        count.add_css_class("pill");
+        count.set_halign(gtk::Align::Center);
+        count.set_valign(gtk::Align::Start);
+        count.set_margin_top(10);
+        page.add_overlay(&count);
+        let key = |icon: char, h: gtk::Align, v: gtk::Align| {
+            let b = gtk::Button::new();
+            b.set_child(Some(&icons::label(icon)));
+            b.add_css_class("key");
+            b.set_halign(h);
+            b.set_valign(v);
+            b.set_margin_start(10);
+            b.set_margin_end(10);
+            b.set_margin_top(10);
+            b
+        };
+        let back = key(icons::ARROW_LEFT, gtk::Align::Start, gtk::Align::Start);
+        let prev = key(icons::ARROW_LEFT, gtk::Align::Start, gtk::Align::Center);
+        let next = key(icons::CHEVRON_RIGHT, gtk::Align::End, gtk::Align::Center);
+        page.add_overlay(&back);
+        page.add_overlay(&prev);
+        page.add_overlay(&next);
+        let at = Rc::new(Cell::new(0usize));
+        let show = {
+            let (pic, count, shots, at) = (pic.clone(), count.clone(), review.clone(), at.clone());
+            Rc::new(move |i: usize| {
+                let s = shots.borrow();
+                if s.is_empty() {
+                    return;
+                }
+                let i = i.min(s.len() - 1);
+                at.set(i);
+                pic.set_paintable(Some(&s[i]));
+                count.set_label(&format!("{} / {}", i + 1, s.len()));
+            })
+        };
+        let p = page.clone();
+        back.connect_clicked(move |_| p.set_visible(false));
+        let (sh, a) = (show.clone(), at.clone());
+        prev.connect_clicked(move |_| sh(a.get().saturating_sub(1)));
+        let (sh, a) = (show.clone(), at.clone());
+        next.connect_clicked(move |_| sh(a.get() + 1));
+        let swipe = gtk::GestureSwipe::new();
+        let (sh, a) = (show.clone(), at.clone());
+        swipe.connect_swipe(move |_, vx, _| {
+            if vx > 200.0 {
+                sh(a.get().saturating_sub(1));
+            } else if vx < -200.0 {
+                sh(a.get() + 1);
+            }
+        });
+        page.add_controller(swipe);
+        let open = gtk::GestureClick::new();
+        let (p, shots, sh) = (page.clone(), review.clone(), show.clone());
+        open.connect_released(move |_, _, _, _| {
+            let n = shots.borrow().len();
+            if n > 0 {
+                p.set_visible(true);
+                sh(n - 1);
+            }
+        });
+        thumb_box.add_controller(open);
+        root.add_overlay(&page);
+    }
     // laid out at the design size and scaled to the screen (fit.rs): 250 % leaves less logical room
     window.set_child(Some(&fit::Fit::wrap(&root)));
 
@@ -4446,6 +4529,7 @@ fn build(gapp: &gtk::Application) {
         root: root.clone(),
         shutter,
         thumb,
+        review: review.clone(),
         thumb_spin,
         blackout,
         burst_screen,
