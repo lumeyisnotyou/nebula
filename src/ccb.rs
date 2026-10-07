@@ -54,6 +54,7 @@ pub struct Capture {
 
 pub const CAPTURE_NO_PRECAPTURE: u8 = 1; // the preview's exposure as it is
 pub const CAPTURE_NO_STACK: u8 = 2; // one frame per module
+pub const CAPTURE_STACK: u8 = 4; // stack this photo's exposures even in the manual modes
 
 const IOC_CAPTURE: u64 = 3 << 30 | 40 << 16 | (b'L' as u64) << 8 | 5;
 const IOC_TRANSFER: u64 = 1 << 30 | 4 << 16 | (b'L' as u64) << 8 | 6;

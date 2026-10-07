@@ -2,8 +2,8 @@
 // an auto photo take up to 100 ms rather than the handheld 42 ms. Stock turns it on while the
 // camera is still (its trigger is in a library we don't have). Here: how far the camera turns
 // in each 100 ms (the longest such photo), against what blurs it by BLUR_PX pixels at the
-// zoom in use (a pixel is 0.30 mrad at 28 mm, 0.055 mrad at 150 mm), so a steady hand can
-// qualify at 28 mm while at 150 mm only a rest will. Still once it has stayed under that for
+// zoom in use (a pixel is 0.30 mrad at 28 mm, 0.055 mrad at 150 mm), so only a camera at rest
+// qualifies (a hand, braced as well as it can be, does not at any zoom). Still once it has stayed under that for
 // SETTLE, moving again as soon as a window passes 1.5x it.
 // It also tells AF-D when the camera has moved and settled again (`moved`): stock's
 // SignificantMotionDetector, gyro flavour: a turn faster than 0.7 rad/s, then 300 ms
@@ -20,13 +20,20 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-const BLUR_PX: f64 = 1.5;
+// (1.5 px let a braced hand count as a tripod: auto then took 100 ms photos, and stacks, in the
+// hand, and they came out blurred; 0.5 px takes a camera at rest)
+const BLUR_PX: f64 = 0.5;
 const EXPOSURE: f64 = 0.1; // s: tripod mode's longest auto photo
-const SETTLE: Duration = Duration::from_secs(1);
+const SETTLE: Duration = Duration::from_millis(1500);
 const MOTION: f64 = 0.7; // rad/s: stock's AF-D motion (gyro)
 const MOTION_STABLE: Duration = Duration::from_millis(300);
 // one pixel at 28 mm: the 13 MP modules' 1.1 um pixels over their 3.7 mm focal length
 const PIXEL_28MM: f64 = 1.1e-3 / 3.7;
+
+// the most the camera may turn in 100 ms (rad) and still count as resting, at @mm
+fn blur_limit(mm: f64) -> f64 {
+    BLUR_PX * PIXEL_28MM * 28.0 / mm
+}
 
 fn find() -> Option<(PathBuf, PathBuf)> {
     for e in fs::read_dir("/sys/bus/iio/devices").ok()?.flatten() {
@@ -126,7 +133,7 @@ pub fn spawn(on: Arc<AtomicBool>, still: Arc<AtomicBool>, focal: Arc<AtomicU32>,
                 // the turn in the last 100 ms, and what blurs a photo that long
                 let turn = (sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2]).sqrt() / rate;
                 let mm = focal.load(Ordering::Relaxed).max(280) as f64 / 10.0;
-                let limit = BLUR_PX * PIXEL_28MM * 28.0 / mm;
+                let limit = blur_limit(mm);
                 if turn > limit {
                     quiet_since = Instant::now();
                 }
@@ -152,4 +159,28 @@ pub fn spawn(on: Arc<AtomicBool>, still: Arc<AtomicBool>, focal: Arc<AtomicU32>,
             let _ = enable(&sys, false);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // rad turned in 100 ms by a hand that braces the camera as well as it can: about 3 mrad/s
+    const BRACED_HAND: f64 = 3e-3 * EXPOSURE;
+    // and by a camera on a table or a tripod: about 0.1 mrad/s
+    const AT_REST: f64 = 0.1e-3 * EXPOSURE;
+
+    #[test]
+    fn a_braced_hand_is_not_tripod_still_at_any_zoom() {
+        for mm in [28.0, 35.0, 70.0, 150.0] {
+            assert!(BRACED_HAND > blur_limit(mm), "{mm} mm");
+        }
+    }
+
+    #[test]
+    fn a_camera_at_rest_is_still_at_every_zoom() {
+        for mm in [28.0, 35.0, 70.0, 150.0] {
+            assert!(AT_REST < blur_limit(mm), "{mm} mm");
+        }
+    }
 }

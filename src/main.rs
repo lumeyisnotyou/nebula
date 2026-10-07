@@ -349,6 +349,7 @@ struct State {
     metering: u8, // 0 centre-weighted, 1 touch, 2 whole frame
     caf: bool,
     stacked: bool,
+    stack_manual: bool, // the stack key in the manual modes: several exposures per photo
     exposure_info: bool,
     inverse_wheel: bool,
     strip_zoom: bool,
@@ -393,12 +394,29 @@ struct State {
 }
 
 impl State {
+    // the stack key's state in this mode: auto's night stacking (the setting), or the manual modes' key
+    fn stack_on(&self) -> bool {
+        if self.mode == Mode::Auto {
+            self.stacked
+        } else {
+            self.stack_manual
+        }
+    }
+
+    fn toggle_stack(&mut self) {
+        if self.mode == Mode::Auto {
+            self.stacked = !self.stacked;
+        } else {
+            self.stack_manual = !self.stack_manual;
+        }
+    }
+
     // what's kept between runs, as the settings file's lines
     fn saved(&self) -> String {
         let mode = self.mode.short();
         format!(
             "mode={mode}\niso={}\nshutter={}\nev={}\nflash={}\ntimer={}\ngrid={}\nhistogram={}\nassist={}\nburst={}\n\
-             wb={}\nmetering={}\ncaf={}\nstacked={}\nexposure_info={}\ninverse_wheel={}\nhaptics={}\ncontinuous={}\nstrip_zoom={}\ntoolbar={}\ntool_cycle={}\nlens_warn={}\ndevice_status={}\npocket={}\ngeotag={}\naccent={}\ncontrast={}\npinned={}\nstrip_set={}\nsparkle={}\n",
+             wb={}\nmetering={}\ncaf={}\nstacked={}\nexposure_info={}\ninverse_wheel={}\nhaptics={}\ncontinuous={}\nstrip_zoom={}\ntoolbar={}\ntool_cycle={}\nlens_warn={}\ndevice_status={}\npocket={}\ngeotag={}\naccent={}\ncontrast={}\npinned={}\nstrip_set={}\nsparkle={}\nstack_manual={}\n",
             self.iso,
             self.shutter,
             self.ev,
@@ -428,6 +446,7 @@ impl State {
             self.pinned,
             self.strip_set,
             self.sparkle as u8,
+            self.stack_manual as u8,
         )
     }
 
@@ -465,8 +484,9 @@ impl State {
         self.pocket = flag("pocket", self.pocket);
         self.geotag = flag("geotag", self.geotag);
         self.sparkle = flag("sparkle", self.sparkle);
+        self.stack_manual = flag("stack_manual", self.stack_manual);
         self.contrast = num("contrast").map_or(self.contrast, |v| (v as usize).min(2));
-        self.pinned = num("pinned").map_or(self.pinned, |v| v as u16 & 0x0fff);
+        self.pinned = num("pinned").map_or(self.pinned, |v| v as u16 & 0x1fff);
         self.strip_set = num("strip_set").map_or(self.strip_set, |v| (v as u8) & 0b1111);
         self.accent = num("accent").map_or(self.accent, |v| (v as usize).min(ACCENTS.len() - 1));
     }
@@ -486,9 +506,10 @@ enum Tool {
     Meter,
     Geo,
     Strip,
+    Stack,
 }
 
-const TOOLS: [Tool; 11] = [
+const TOOLS: [Tool; 12] = [
     Tool::Flash,
     Tool::Wb,
     Tool::Timer,
@@ -500,6 +521,7 @@ const TOOLS: [Tool; 11] = [
     Tool::Meter,
     Tool::Geo,
     Tool::Strip,
+    Tool::Stack,
 ];
 
 impl Tool {
@@ -517,6 +539,7 @@ impl Tool {
             Tool::Meter => "meter",
             Tool::Geo => "geo",
             Tool::Strip => "strip",
+            Tool::Stack => "stack",
         }
     }
 
@@ -530,7 +553,7 @@ impl Tool {
             Tool::Burst => Some(Opt::Burst),
             Tool::Assist => Some(Opt::Assist),
             Tool::Meter => Some(Opt::Meter),
-            Tool::Histogram | Tool::Afd | Tool::Geo | Tool::Strip => None,
+            Tool::Histogram | Tool::Afd | Tool::Geo | Tool::Strip | Tool::Stack => None,
         }
     }
 }
@@ -545,6 +568,31 @@ enum Opt {
     Burst,
     Assist,
     Meter,
+}
+
+// What a photo asks of the driver. Quick shots: no precapture metering (about half a second; the
+// preview is metered) and one frame per module; bursts are always quick. In the dark in auto, as
+// stock: the precapture metering, and the ASICs stack several exposures per module when they
+// judge it needed (slower, 4x the data, less noise; the setting can turn stacking off), but only
+// with the camera still: a stack of long exposures smears with a hand's shake, so in the hand
+// the photo is one short frame. The manual modes stack only when the stack key says so (always
+// then, no metering: they take your exposure several times).
+fn capture_flags(mode: Mode, live_iso: i32, burst: u8, auto_stack: bool, manual_stack: bool, still: bool) -> u8 {
+    const QUICK: u8 = ccb::CAPTURE_NO_PRECAPTURE | ccb::CAPTURE_NO_STACK;
+    if burst > 1 {
+        return QUICK;
+    }
+    if mode == Mode::Auto {
+        if live_iso <= 400 {
+            return QUICK;
+        }
+        return if auto_stack && still { 0 } else { ccb::CAPTURE_NO_STACK };
+    }
+    if manual_stack {
+        ccb::CAPTURE_NO_PRECAPTURE | ccb::CAPTURE_STACK
+    } else {
+        QUICK
+    }
 }
 
 struct App {
@@ -689,6 +737,7 @@ struct App {
     enc_turn: Vec<Rotator>,
     meter_btn: gtk::Button,
     geo_btn: gtk::Button,
+    stack_btn: gtk::Button,
     strip_btn: gtk::Button,
     timer_btn: gtk::Button,
     grid_btn: gtk::Button,
@@ -1124,6 +1173,8 @@ impl App {
         icons::set_key(&self.meter_btn, icons::METER[st.metering as usize], ["CTR", "SPOT", "ALL"][st.metering as usize]);
         icons::set_key(&self.geo_btn, if st.geotag { icons::GEO } else { icons::GEO_OFF }, if st.geotag { "ON" } else { "OFF" });
         set_class(&self.geo_btn, "on", st.geotag);
+        icons::set_key(&self.stack_btn, if st.stack_on() { icons::STACK } else { icons::STACK_OFF }, if st.stack_on() { "ON" } else { "OFF" });
+        set_class(&self.stack_btn, "on", st.stack_on());
         icons::set_key(&self.strip_btn, icons::STRIP, STRIP_FNS[st.strip_fn].0);
         set_class(&self.strip_btn, "on", st.strip_fn != 0);
         set_class(&self.enc_turn[2], "gone", st.mode == Mode::Manual);
@@ -1342,6 +1393,7 @@ impl App {
             Tool::Meter => icons::METER[st.metering as usize],
             Tool::Geo => if st.geotag { icons::GEO } else { icons::GEO_OFF },
             Tool::Strip => icons::STRIP,
+            Tool::Stack => if st.stack_on() { icons::STACK } else { icons::STACK_OFF },
         }
     }
 
@@ -1491,6 +1543,7 @@ impl App {
             Tool::Meter => &self.meter_btn,
             Tool::Geo => &self.geo_btn,
             Tool::Strip => &self.strip_btn,
+            Tool::Stack => &self.stack_btn,
         }
     }
 
@@ -1510,6 +1563,7 @@ impl App {
                         match t {
                             Tool::Histogram => st.histogram = !st.histogram,
                             Tool::Geo => st.geotag = !st.geotag,
+                            Tool::Stack => st.toggle_stack(),
                             _ => st.caf = !st.caf,
                         }
                     }
@@ -1917,12 +1971,13 @@ impl App {
         if self.st.borrow().sparkle {
             led::sparkle(accent());
         }
-        let (zoom, burst, seq, dark, stacked) = {
+        let (zoom, burst, seq, flags) = {
             let mut st = self.st.borrow_mut();
             st.busy = true;
             st.saving += 1;
             st.seq += 1;
-            (st.zoom, BURSTS[st.burst], st.seq, st.mode == Mode::Auto && st.live_iso > 400, st.stacked)
+            let flags = capture_flags(st.mode, st.live_iso, BURSTS[st.burst], st.stacked, st.stack_manual, st.tripod);
+            (st.zoom, BURSTS[st.burst], st.seq, flags)
         };
         self.thumb.set_paintable(self.preview_still(88.0, 66.0).as_ref());
         if locked() {
@@ -2002,19 +2057,6 @@ impl App {
             self.fade_blackout();
             self.saved();
             return self.show_status("capture failed: no transfer streams", 6);
-        };
-        // Quick shots: no precapture metering (about half a second; the preview is metered)
-        // and one frame per module. In the dark, as stock: the precapture metering, and the
-        // ASICs stack several exposures per module when they judge it needed (slower, 4x
-        // the data, less noise; the settings can turn stacking off). Bursts are always quick.
-        let flags = if dark && burst == 1 {
-            if stacked {
-                0
-            } else {
-                ccb::CAPTURE_NO_STACK
-            }
-        } else {
-            ccb::CAPTURE_NO_PRECAPTURE | ccb::CAPTURE_NO_STACK
         };
         thread::spawn(move || {
             let c = match ccb::Ccb::open() {
@@ -2513,8 +2555,17 @@ impl App {
         };
         self.set_badge("shake", &self.shake_badge, shake, icons::HAND_WAVE, "Hold steady", "The shutter is slow enough that a shaky hand will blur the photo. Brace the camera, or use a tripod.");
         // the moon: a stacked capture ahead (only where stacking is on: auto, the setting)
-        let stacking = self.st.borrow().stacked && self.st.borrow().mode == Mode::Auto;
-        self.set_badge("moon", &self.moon_badge, stacking && self.metered[3].load(Ordering::Relaxed) == 1, icons::MOON, "Stacked photo ahead", "It is dark: several exposures will be taken and combined. Hold still.");
+        // (in auto only with the camera still: in the hand it is one frame; in the manual modes
+        // whenever the stack key is on)
+        let stacking = {
+            let st = self.st.borrow();
+            if st.mode == Mode::Auto {
+                st.stacked && st.tripod && self.metered[3].load(Ordering::Relaxed) == 1
+            } else {
+                st.stack_manual
+            }
+        };
+        self.set_badge("moon", &self.moon_badge, stacking, icons::MOON, "Stacked photo ahead", "It is dark: several exposures will be taken and combined. Hold still.");
         let (show, asleep) = {
             let st = self.st.borrow();
             (st.histogram, st.asleep)
@@ -3146,6 +3197,12 @@ impl App {
             Tool::Afd => if st.caf { s("Continuous focus on", "It refocuses when the scene changes.") } else { s("Continuous focus off", "It focuses when you tap.") },
             Tool::Meter => [s("Centre-weighted", "It meters the middle of the frame."), s("Touch metering", "It meters where you tap."), s("Whole frame", "It meters the whole frame.")][st.metering as usize].clone(),
             Tool::Geo => if st.geotag { s("Geotag on", "Photos record where they were taken.") } else { s("Geotag off", "Photos carry no location.") },
+            Tool::Stack => match (st.mode == Mode::Auto, st.stack_on()) {
+                (true, true) => s("Night stacking on", "In the dark, with the camera still, several exposures are combined."),
+                (true, false) => s("Night stacking off", "One frame, even in the dark."),
+                (false, true) => s("Stacking on", "Each photo takes several exposures at your settings and combines them: slower, less noise. Hold still."),
+                (false, false) => s("Stacking off", "One frame a photo."),
+            },
             Tool::Strip => (format!("Touch strip: {}", STRIP_FNS[st.strip_fn].1), "Slide along it to change this. Double tap it to switch.".to_string()),
         }
     }
@@ -4078,11 +4135,12 @@ fn build(gapp: &gtk::Application) {
     let assist_btn = icons::button(icons::ASSIST_OFF, "");
     let meter_btn = icons::button(icons::METER[0], "");
     let geo_btn = icons::button(icons::GEO_OFF, "");
+    let stack_btn = icons::button(icons::STACK_OFF, "");
     let strip_btn = icons::button(icons::STRIP, "");
     let mut keys: Vec<gtk::Button> = Vec::new();
     for (k, b) in [
         &mode_btn, &flash_btn, &wb_btn, &timer_btn, &grid_btn, &hist_btn, &assist_btn, &burst_btn, &afd_btn, &meter_btn,
-        &geo_btn, &strip_btn,
+        &geo_btn, &strip_btn, &stack_btn,
     ]
     .into_iter()
     .enumerate()
@@ -4613,6 +4671,7 @@ fn build(gapp: &gtk::Application) {
             caf_zoom: None,
             caf_pause_until: None,
             stacked: true,
+            stack_manual: false,
             exposure_info: true,
             inverse_wheel: false,
             strip_zoom: true,
@@ -4760,6 +4819,7 @@ fn build(gapp: &gtk::Application) {
         hint_at: RefCell::new(HashMap::new()),
         meter_btn,
         geo_btn,
+        stack_btn,
         strip_btn,
         timer_btn,
         grid_btn,
@@ -5441,4 +5501,56 @@ fn main() -> glib::ExitCode {
         }
     });
     app.run_with_args(&args)
+}
+
+#[cfg(test)]
+mod capture_flag_tests {
+    use super::*;
+
+    const QUICK: u8 = ccb::CAPTURE_NO_PRECAPTURE | ccb::CAPTURE_NO_STACK;
+
+    #[test]
+    fn auto_in_the_dark_stacks_when_the_camera_is_still() {
+        assert_eq!(capture_flags(Mode::Auto, 800, 1, true, false, true), 0);
+    }
+
+    #[test]
+    fn auto_in_the_dark_never_stacks_in_the_hand() {
+        // a stack of long exposures smears with a hand's shake: one short frame instead
+        assert_eq!(capture_flags(Mode::Auto, 800, 1, true, false, false), ccb::CAPTURE_NO_STACK);
+    }
+
+    #[test]
+    fn auto_with_stacking_switched_off_never_stacks() {
+        assert_eq!(capture_flags(Mode::Auto, 800, 1, false, false, true), ccb::CAPTURE_NO_STACK);
+    }
+
+    #[test]
+    fn auto_in_the_light_is_a_quick_shot() {
+        assert_eq!(capture_flags(Mode::Auto, 100, 1, true, false, true), QUICK);
+    }
+
+    #[test]
+    fn the_manual_modes_stack_only_when_asked() {
+        for m in [Mode::Iso, Mode::Shutter, Mode::Manual] {
+            assert_eq!(capture_flags(m, 800, 1, true, false, true), QUICK, "{}", m.short());
+            assert_eq!(
+                capture_flags(m, 100, 1, false, true, false),
+                ccb::CAPTURE_NO_PRECAPTURE | ccb::CAPTURE_STACK,
+                "{}",
+                m.short()
+            );
+        }
+    }
+
+    #[test]
+    fn the_manual_stack_key_does_not_touch_auto() {
+        assert_eq!(capture_flags(Mode::Auto, 100, 1, true, true, true), QUICK);
+    }
+
+    #[test]
+    fn bursts_are_always_quick() {
+        assert_eq!(capture_flags(Mode::Auto, 800, 3, true, false, true), QUICK);
+        assert_eq!(capture_flags(Mode::Manual, 100, 3, true, true, true), QUICK);
+    }
 }
