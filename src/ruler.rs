@@ -79,7 +79,7 @@ mod imp {
             let (cx, shown) = (w / 2.0, self.shown.get());
             let text = |s: &str, x: f32, y: f32, size: f64, colour: &gdk::RGBA| {
                 let layout = widget.create_pango_layout(Some(s));
-                let mut font = pango::FontDescription::from_string("Adwaita Mono, Droid Sans Mono, Monospace Bold");
+                let mut font = pango::FontDescription::from_string("DM Mono, Adwaita Mono, Droid Sans Mono, Monospace Medium");
                 font.set_absolute_size(size * crate::TEXT_SCALE * pango::SCALE as f64);
                 layout.set_font_description(Some(&font));
                 let (tw, th) = layout.pixel_size();

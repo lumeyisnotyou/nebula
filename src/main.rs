@@ -12,6 +12,7 @@ mod canvas;
 mod ccb;
 mod dev;
 mod dots;
+mod fonts;
 mod fit;
 mod geo;
 mod gyro;
@@ -136,8 +137,8 @@ const FLYOUT: (i32, i32) = (280, 84 + ruler::HEIGHT);
 const HIST_BINS: usize = 64;
 
 const CSS: &str = "
-window.camera { background: #000; color: #f2f2ee; font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; }
-.mono, .set-value, .countdown, .burst-count, .bubble-title { font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; }
+window.camera { background: #000; color: #f2f2ee; font-family: 'DM Sans', 'Adwaita Sans', 'Droid Sans', sans-serif; }
+.mono, .set-value, .countdown, .burst-count, .bubble-title { font-family: 'DM Mono', 'Adwaita Mono', 'Droid Sans Mono', monospace; }
 label, button { text-transform: lowercase; }
 .flyout { background: #101012; border: 1px solid alpha(@accent, 0.55); border-radius: 10px; }
 .encoder.held { border-color: alpha(@accent, 0.8); background: #17171a; }
@@ -154,8 +155,8 @@ button.flat-white:active { background: rgba(255,255,255,0.10); }
 .key.on { color: @accent; background: alpha(@accent, 0.13); border-color: alpha(@accent, 0.75); }
 .zoom-pill { background: rgba(18,18,20,0.88); border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; padding: 3px; }
 .zoom-chip { background: none; border: none; box-shadow: none; outline: none; padding: 0; border-radius: 6px;
-    color: rgba(242,242,238,0.75); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
-    font-size: 16px; font-weight: 700; min-width: 70px; min-height: 42px;
+    color: rgba(242,242,238,0.75); font-family: 'DM Mono', 'Adwaita Mono', 'Droid Sans Mono', monospace;
+    font-size: 16px; font-weight: 500; min-width: 70px; min-height: 42px;
     transition: background 140ms ease, color 140ms ease; }
 .zoom-chip:active { transform: scale(0.94); }
 .zoom-chip.active { background: @accent; color: #0b0b0c; }
@@ -163,8 +164,8 @@ button.flat-white:active { background: rgba(255,255,255,0.10); }
 .thumb { border: 1px solid rgba(255,255,255,0.55); border-radius: 10px; }
 .blackout { background: #000; }
 .burst-screen { background: #000; }
-.device-status label { color: rgba(242,242,238,0.75); font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace;
-    font-size: 15px; font-weight: 600; }
+.device-status label { color: rgba(242,242,238,0.75); font-family: 'DM Mono', 'Adwaita Mono', 'Droid Sans Mono', monospace;
+    font-size: 15px; font-weight: 500; }
 .battery-screen { background: #000; }
 .thermal-warning { color: #fff; font-size: 14px; font-weight: 700; background: rgba(200,40,40,0.85);
     border-radius: 14px; padding: 5px 16px; }
@@ -172,11 +173,11 @@ button.flat-white:active { background: rgba(255,255,255,0.10); }
 .burst-count { color: #f2f2ee; font-size: 56px; }
 .burst-saving { color: rgba(242,242,238,0.8); font-size: 20px; }
 .assist-badge { color: @accent; font-size: 15px; }
-.burst-badge { color: @accent; font-family: 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 12px;
-    font-weight: 700; border: 1px solid alpha(@accent, 0.6); border-radius: 8px; padding: 0 6px; }
+.burst-badge { color: @accent; font-family: 'DM Mono', 'Adwaita Mono', 'Droid Sans Mono', monospace; font-size: 12px;
+    font-weight: 500; border: 1px solid alpha(@accent, 0.6); border-radius: 8px; padding: 0 6px; }
 .settings { background: #000; }
-.set-title { font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; color: #f2f2ee; font-size: 17px; font-weight: 600; }
-.set-sub { font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; color: rgba(242,242,238,0.50); font-size: 13px; }
+.set-title { font-family: 'DM Sans', 'Adwaita Sans', 'Droid Sans', sans-serif; color: #f2f2ee; font-size: 17px; font-weight: 600; }
+.set-sub { font-family: 'DM Sans', 'Adwaita Sans', 'Droid Sans', sans-serif; color: rgba(242,242,238,0.50); font-size: 13px; }
 .spin { transition: transform 50ms ease-in; }
 window.rot-cw .spin { transform: rotate(90deg); }
 window.rot-ccw .spin { transform: rotate(-90deg); }
@@ -190,38 +191,38 @@ window.rot-ccw .spin { transform: rotate(-90deg); }
 .pick-row.on { background: @accent; color: #0b0b0c; }
 .bubble { background: #141416; border: 1px solid rgba(255,255,255,0.18); border-radius: 12px; padding: 12px 16px; }
 .bubble-title { color: @accent; font-size: 17px; font-weight: 700; }
-.bubble-text { color: rgba(242,242,238,0.82); font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 15px; }
+.bubble-text { color: rgba(242,242,238,0.82); font-family: 'DM Sans', 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 15px; }
 .enc-wrap { transition: opacity 240ms ease, transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .enc-wrap.gone { opacity: 0; transform: translateY(32px); }
 .key.stowed { opacity: 0; transform: translateX(44px); }
 .key.pinned { border-color: alpha(@accent, 0.55); }
 .pill { background: #141416; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; padding: 6px 18px;
-    color: #f2f2ee; font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 16px; font-weight: 600; }
+    color: #f2f2ee; font-family: 'DM Sans', 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 16px; font-weight: 600; }
 .alert-icon { color: @accent; }
 .scrim { background: rgba(0,0,0,0.6); }
 .sidebar { background: #101012; border-right: 1px solid rgba(255,255,255,0.12); padding: 22px 18px;
     transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .sidebar.side-hidden { transform: translateX(-340px); }
-.side-title { color: rgba(242,242,238,0.5); font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 13px;
+.side-title { color: rgba(242,242,238,0.5); font-family: 'DM Sans', 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 13px;
     font-weight: 700; letter-spacing: 3px; margin-bottom: 8px; }
 .side-row { background: none; border: none; box-shadow: none; outline: none; color: #f2f2ee; border-radius: 10px;
     min-height: 56px; padding: 0 12px; font-size: 19px; font-weight: 600; }
 .side-row:active { background: rgba(255,255,255,0.14); transform: scale(0.98); }
-.side-head { color: rgba(242,242,238,0.45); font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 12px;
+.side-head { color: rgba(242,242,238,0.45); font-family: 'DM Sans', 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 12px;
     font-weight: 700; letter-spacing: 2px; margin-top: 18px; margin-bottom: 4px; padding-left: 12px; }
 .side-quick { padding-left: 12px; }
-.side-about { color: rgba(242,242,238,0.42); font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 12px; padding-left: 12px; }
+.side-about { color: rgba(242,242,238,0.42); font-family: 'DM Sans', 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 12px; padding-left: 12px; }
 .settings { background: #000; }
 .nav { background: #0b0b0c; }
 .nav row { padding: 20px 26px; background: none; color: rgba(242,242,238,0.7); font-size: 19px; font-weight: 600;
     border-bottom: 1px solid rgba(255,255,255,0.06); }
 .nav row:selected { background: alpha(@accent, 0.14); color: @accent; }
 .pane { padding: 18px 34px 34px 34px; }
-.pane-title { color: rgba(242,242,238,0.45); font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 12px;
+.pane-title { color: rgba(242,242,238,0.45); font-family: 'DM Sans', 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 12px;
     font-weight: 700; letter-spacing: 3px; margin-bottom: 8px; }
 .pane-row { padding: 16px 0; border-bottom: 1px solid rgba(255,255,255,0.08); }
 .choices { margin-top: 2px; }
-.about-line { color: rgba(242,242,238,0.6); font-family: 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 15px; margin-top: 6px; }
+.about-line { color: rgba(242,242,238,0.6); font-family: 'DM Sans', 'Adwaita Sans', 'Droid Sans', sans-serif; font-size: 15px; margin-top: 6px; }
 .check-label { color: #f2f2ee; font-size: 17px; font-weight: 600; }
 checkbutton { padding: 6px 0; }
 checkbutton check { margin-right: 12px; min-width: 24px; min-height: 24px; border-radius: 7px; background: #17171a;
@@ -234,6 +235,8 @@ window.contrast .encoder, window.contrast .key, window.contrast .zoom-pill { bac
 window.contrast .key { color: #ffffff; }
 window.contrast .key.on { background: alpha(@accent, 0.28); border-color: @accent; }
 window.contrast .zoom-chip { color: #ffffff; }
+.edge-pill { background: rgba(242,242,238,0.32); border-radius: 999px; min-width: 5px; min-height: 56px; }
+window.contrast .edge-pill { background: rgba(255,255,255,0.7); }
 window.contrast .pill, window.contrast .bubble { background: #26262b; border-width: 2px; }
 window.contrast .bubble-text { color: #ffffff; }
 window.contrast .sidebar, window.contrast .nav { background: #1c1c20; }
@@ -576,6 +579,8 @@ struct App {
     alert_timer: RefCell<Option<glib::SourceId>>,
     alert_key: Cell<&'static str>,
     zoom_pill: gtk::Box,
+    // the little pill at the controls' edge: swipe there to hide them, or bring them back
+    pill_r: gtk::Box,
     thermal_t: Cell<f64>,
     thermal_anim: RefCell<Option<gtk::TickCallbackId>>,
     thermal_turn: Rotator,
@@ -824,12 +829,12 @@ fn module_for(zoom: f64) -> usize {
 // (through Pango, which falls back to other fonts for glyphs like ⅓ that cairo's own text
 // drew as boxes)
 fn text(cr: &cairo::Context, s: &str, x: f64, y: f64, size: f64, align: f64) {
-    text_in(cr, "Adwaita Mono, Droid Sans Mono, Monospace Bold", s, x, y, size, align);
+    text_in(cr, "DM Mono, Adwaita Mono, Droid Sans Mono, Monospace Medium", s, x, y, size, align);
 }
 
 // words, in the sans (digits are in the mono: `text`)
 fn text_sans(cr: &cairo::Context, s: &str, x: f64, y: f64, size: f64, align: f64) {
-    text_in(cr, "Adwaita Sans, Droid Sans, Sans Bold", s, x, y, size, align);
+    text_in(cr, "DM Sans, Adwaita Sans, Droid Sans, Sans Bold", s, x, y, size, align);
 }
 
 // an icon (the Nerd symbols font), centred on (x, y)
@@ -1564,6 +1569,12 @@ impl App {
             r.set_quarter(q);
         }
         self.place_status(q);
+        self.place_status_box();
+        // stowed: the pinned keys' pitch (and how many fit) changes with the way the camera is held
+        if self.compact.get() {
+            self.leave_compact();
+            self.enter_compact();
+        }
     }
 
     // the status line along the preview's top edge as the camera is held: the top, or the
@@ -2282,6 +2293,23 @@ impl App {
         self.refresh();
     }
 
+    // the device status in the corner: turned a quarter, each label lies along the screen's edge and
+    // needs its length of room above its middle (it was cut off at the top, icon and all)
+    fn place_status_box(&self) {
+        let top = if self.quarter.get() == 0 {
+            16
+        } else {
+            let len = self
+                .storage_label
+                .measure(gtk::Orientation::Horizontal, -1)
+                .1
+                .max(self.battery_label.measure(gtk::Orientation::Horizontal, -1).1);
+            let h = self.storage_label.measure(gtk::Orientation::Vertical, -1).1;
+            ((len - h) / 2 + 6).max(16)
+        };
+        self.status_box.set_margin_top(top);
+    }
+
     // stock's device status: the battery (its icon steps at 90, 60, 35 and 15%) and, at 10% or
     // less, the battery-low screen over the camera until 12% (stock's hysteresis)
     fn update_battery(self: &Rc<Self>) {
@@ -2306,6 +2334,7 @@ impl App {
         let icon = if charging { icons::BATTERY_CHARGING[step] } else { icons::BATTERY[step] };
         self.battery_label.set_markup(&icons::markup(icon, &format!("{level}%")));
         self.status_box.set_visible(show);
+        self.place_status_box();
     }
 
     // captures left: free space less stock's 500 MiB reserve, over the size of the last
@@ -2320,6 +2349,7 @@ impl App {
         let left = free / photo_size();
         self.st.borrow_mut().captures_left = left;
         self.storage_label.set_markup(&icons::markup(icons::STORAGE, &left.to_string()));
+        self.place_status_box();
         if !warn {
             return;
         }
@@ -2769,7 +2799,9 @@ impl App {
                                 if st.inverse_wheel { -1.0 } else { 1.0 },
                             )
                         };
-                        self.set_dial(dial, pos - inverse * (x - last) as f64 / STRIP_LEN * 0.8);
+                        // the shutter's range is the widest (many stops): less of it to the strip's length
+                        let gain = if dial == Dial::Shutter { 0.32 } else { 0.8 };
+                        self.set_dial(dial, pos - inverse * (x - last) as f64 / STRIP_LEN * gain);
                     }
                 }
             }
@@ -3186,6 +3218,12 @@ impl App {
         }
     }
 
+    // a pinned key's pitch in the strip: its height and the gap; turned a quarter (held as a portrait) the
+    // key is drawn on its side, so its width is the height it needs
+    fn pin_pitch(&self) -> f64 {
+        (if self.quarter.get() == 0 { KEY_H } else { SHUTTER_W }) + 8.0
+    }
+
     // how many pinned keys fit in the narrow column: its height less the gallery, the shutter
     // and the gaps, in keys
     fn pin_cap(&self) -> usize {
@@ -3194,7 +3232,7 @@ impl App {
             return 3;
         }
         let room = h - 20.0 - SHUTTER_W - SHUTTER_W - 20.0 + 8.0;
-        ((room / (KEY_H + 8.0)).floor() as usize).max(1)
+        ((room / self.pin_pitch()).floor() as usize).max(1)
     }
 
     // the pinned keys out of the grid and into the strip at the shutter's width; the gallery
@@ -3209,11 +3247,12 @@ impl App {
             if pinned >> k & 1 == 1 && placed < cap {
                 placed += 1;
                 self.key_grid.remove(key);
-                key.set_size_request(SHUTTER_W as i32, -1);
+                key.set_size_request(SHUTTER_W as i32, KEY_H as i32);
                 self.pin_strip.append(key);
             }
         }
         self.key_grid.set_visible(false);
+        self.pin_strip.set_spacing(self.pin_pitch() as i32 - KEY_H as i32);
         self.pin_strip.set_visible(true);
         self.shutter_row.set_orientation(gtk::Orientation::Vertical);
         self.shutter_row.set_spacing(10);
@@ -3301,6 +3340,7 @@ impl App {
         let lerp = |a: f64, b: f64| a + (b - a) * t;
         let warm = THERMAL_ROOM * self.thermal_t.get();
         self.right.set_width_request(lerp(RIGHT_W, STOW_W) as i32);
+        self.pill_r.set_margin_end(lerp(RIGHT_W, STOW_W) as i32 + 5);
         self.centre.set_margin_end(lerp(RESERVE_FULL, RESERVE_STOW) as i32);
         self.frame.set_margin_bottom((lerp(LENS_ROOM, 0.0) + warm) as i32);
         self.zoom_pill.set_margin_bottom((10.0 + warm) as i32);
@@ -3560,7 +3600,7 @@ impl App {
         // an icon for the dial, its name small under it (lowercase)
         cr.set_source_rgba(on.0, on.1, on.2, if active { 1.0 } else { 0.7 });
         icon_at(cr, [icons::DIAL_ISO, icons::DIAL_SHUTTER, icons::DIAL_EV][dial_index(dial)], cx, cy - 5.0, 24.0);
-        text_sans(cr, &name.to_lowercase(), cx, cy + 13.0, 7.0, 0.5);
+        text_sans(cr, &name.to_lowercase(), cx, cy + 14.0, 9.5, 0.5);
         if !active {
             cr.set_source_rgba(1.0, 1.0, 1.0, 0.45);
             text_sans(cr, "auto", w - 10.0, 14.0, 9.0, 1.0);
@@ -4357,6 +4397,23 @@ fn build(gapp: &gtk::Application) {
     preview.add_overlay(&pill_turn);
     preview.add_overlay(&alert_turn);
     root.add_overlay(&countdown);
+    // the swipe pills: on the left edge (the system panel, not over the lock), and at the controls' edge
+    // (to hide them, or to bring them back from the narrow strip they leave)
+    let pill = |end: bool| {
+        let b = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        b.add_css_class("edge-pill");
+        b.set_halign(if end { gtk::Align::End } else { gtk::Align::Start });
+        b.set_valign(gtk::Align::Center);
+        b.set_can_target(false);
+        b
+    };
+    let pill_l = pill(false);
+    pill_l.set_margin_start(3);
+    pill_l.set_visible(!locked());
+    let pill_r = pill(true);
+    pill_r.set_margin_end(RIGHT_W as i32 + 5);
+    root.add_overlay(&pill_l);
+    root.add_overlay(&pill_r);
     root.add_overlay(&burst_screen);
     root.add_overlay(&flyout_turn);
     root.add_overlay(&scrim);
@@ -4600,6 +4657,7 @@ fn build(gapp: &gtk::Application) {
         alert_timer: RefCell::new(None),
         alert_key: Cell::new(""),
         zoom_pill: zoom_pill.clone(),
+        pill_r: pill_r.clone(),
         thermal_t: Cell::new(0.0),
         thermal_anim: RefCell::new(None),
         thermal_turn: thermal_turn.clone(),
@@ -5141,6 +5199,17 @@ fn build(gapp: &gtk::Application) {
                     }
                     "zoom" => a.set_zoom(70.0),
                     "portrait" => a.apply_quarter(1),
+                    "portrait-ccw" => a.apply_quarter(-1),
+                    "pin" => {
+                        a.st.borrow_mut().pinned = 0b1111;
+                        a.apply_stow();
+                    }
+                    // the device status as on the camera: captures left and the battery, charging
+                    "battery" => {
+                        a.storage_label.set_markup(&icons::markup(icons::STORAGE, "1291"));
+                        a.battery_label.set_markup(&icons::markup(icons::BATTERY_CHARGING[0], "99%"));
+                        a.status_box.set_visible(true);
+                    }
                     "picker" => a.open_picker(),
                     "contrast" => {
                         a.st.borrow_mut().contrast = 1;
@@ -5159,10 +5228,11 @@ fn build(gapp: &gtk::Application) {
                         a.shutter.queue_draw();
                     }
                     "system" => a.show_sidebar(true),
-                    "settings1" | "settings3" | "settings4" => {
+                    "settings1" | "settings2" | "settings3" | "settings4" | "settings5" => {
                         a.fill_settings();
                         a.settings_page.set_visible(true);
-                        let k = match v { "settings1" => 1, "settings3" => 3, _ => 4 };
+                        set_class(&a.settings_page, "page-off", false);
+                        let k = v["settings".len()..].parse().unwrap_or(0);
                         if let Some(row) = a.settings_nav.row_at_index(k) {
                             a.settings_nav.select_row(Some(&row));
                         }
@@ -5180,6 +5250,7 @@ fn build(gapp: &gtk::Application) {
                     "settings" => {
                         a.fill_settings();
                         a.settings_page.set_visible(true);
+                        set_class(&a.settings_page, "page-off", false);
                     }
                     other => eprintln!("nebula: no demo view {other:?}"),
                 }
@@ -5293,6 +5364,8 @@ fn locked() -> bool {
 }
 
 fn main() -> glib::ExitCode {
+    // the app's fonts, before GTK makes its font map
+    fonts::install();
     // started from the app grid, the output went to the console: to a file instead
     // (~/.cache/nebula.log; appended to, as a launch that only hands over to a running
     // camera is a process too; started afresh past 1 MB)
