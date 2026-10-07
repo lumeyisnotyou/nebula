@@ -132,6 +132,12 @@ const RESERVE_STOW: f64 = STOW_W + 10.0 + 8.0;
 const LENS_ROOM: f64 = 70.0;
 // the room the overheating warning takes under the lens strip while it shows
 const THERMAL_ROOM: f64 = 40.0;
+// the controls-edge pill's distance from the screen's right edge: clear of the first key (the column,
+// the margin it has, and a gap), with the controls out and stowed
+const PILL_FULL: f64 = RIGHT_W + 16.0;
+const PILL_STOW: f64 = STOW_W + 13.0;
+// phosh's exit handle lies along the bottom edge over the lock: the zoom strip is lifted clear of it
+const EXIT_HANDLE_ROOM: f64 = 16.0;
 // the flyout beside an encoder
 const FLYOUT: (i32, i32) = (280, 84 + ruler::HEIGHT);
 const HIST_BINS: usize = 64;
@@ -3340,10 +3346,11 @@ impl App {
         let lerp = |a: f64, b: f64| a + (b - a) * t;
         let warm = THERMAL_ROOM * self.thermal_t.get();
         self.right.set_width_request(lerp(RIGHT_W, STOW_W) as i32);
-        self.pill_r.set_margin_end(lerp(RIGHT_W, STOW_W) as i32 + 5);
+        self.pill_r.set_margin_end(lerp(PILL_FULL, PILL_STOW) as i32);
         self.centre.set_margin_end(lerp(RESERVE_FULL, RESERVE_STOW) as i32);
         self.frame.set_margin_bottom((lerp(LENS_ROOM, 0.0) + warm) as i32);
-        self.zoom_pill.set_margin_bottom((10.0 + warm) as i32);
+        let handle = if locked() { EXIT_HANDLE_ROOM } else { 0.0 };
+        self.zoom_pill.set_margin_bottom((10.0 + handle + warm) as i32);
         // a zoom flyout showing follows the strip as it moves
         if self.flyout_at.get() == 3 && !self.flyout_turn.has_css_class("off") {
             self.place_flyout(3);
@@ -4270,7 +4277,7 @@ fn build(gapp: &gtk::Application) {
     }
     zoom_pill.set_halign(gtk::Align::Center);
     zoom_pill.set_valign(gtk::Align::End);
-    zoom_pill.set_margin_bottom(10);
+    zoom_pill.set_margin_bottom(10 + if locked() { EXIT_HANDLE_ROOM as i32 } else { 0 });
     centre.add_overlay(&zoom_pill);
     let countdown = gtk::Label::new(None);
     countdown.add_css_class("countdown");
@@ -4411,7 +4418,7 @@ fn build(gapp: &gtk::Application) {
     pill_l.set_margin_start(3);
     pill_l.set_visible(!locked());
     let pill_r = pill(true);
-    pill_r.set_margin_end(RIGHT_W as i32 + 5);
+    pill_r.set_margin_end(PILL_FULL as i32);
     root.add_overlay(&pill_l);
     root.add_overlay(&pill_r);
     root.add_overlay(&burst_screen);
@@ -4422,20 +4429,8 @@ fn build(gapp: &gtk::Application) {
     root.add_overlay(&battery_screen);
     root.add_overlay(&hot_screen);
     root.add_overlay(&settings_page);
-    // over the lock the system panel is gone: a close button is the way out (besides phosh's
-    // exit swipe and the power button)
-    if locked() {
-        let x = gtk::Button::new();
-        x.set_child(Some(&icons::label(icons::CLOSE)));
-        x.add_css_class("key");
-        x.set_halign(gtk::Align::Start);
-        x.set_valign(gtk::Align::Start);
-        x.set_margin_start(10);
-        x.set_margin_top(10);
-        let w = window.clone();
-        x.connect_clicked(move |_| w.close());
-        root.add_overlay(&x);
-    }
+    // over the lock the way out is phosh's swipe up from the bottom edge (its handle is drawn there: the
+    // zoom strip keeps clear of it), and the power button
     let review: Rc<RefCell<Vec<gdk::Texture>>> = Rc::new(RefCell::new(Vec::new()));
     if locked() {
         // this session's shots: a tap on the thumbnail opens them, newest first; a swipe or the
