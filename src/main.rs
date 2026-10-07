@@ -567,7 +567,7 @@ struct App {
     // stock's device status (top left) and its battery-low screen
     status_box: gtk::Box,
     // iio-sensor-proxy, for the ambient light (claimed while the app runs)
-    light: Option<gtk::gio::DBusProxy>,
+    light: Rc<RefCell<Option<gtk::gio::DBusProxy>>>,
     // and the accelerometer's orientation, for portrait: the UI's quarter turns clockwise
     // (-1, 0, 1; as stock, none upside down) and what turns with it re-laid out
     accel: Option<gtk::gio::DBusProxy>,
@@ -607,6 +607,8 @@ struct App {
     transfers: RefCell<Option<transfer::Transfers>>,
     // the transfers wait for the preview's first frame (start_transfers_on_frame)
     transfers_wait: RefCell<Option<glib::SignalHandlerId>>,
+    // ASIC2's and ASIC3's transfer paths, being made while the preview starts (transfer::prepare)
+    transfers_pre: RefCell<Option<thread::JoinHandle<Result<(), String>>>>,
     transfer_turn: Arc<Mutex<()>>,
     stage_rx: mpsc::Receiver<Stage>,
     input_rx: mpsc::Receiver<input::Ev>,
@@ -2467,6 +2469,7 @@ impl App {
         // 2 lux for 30 s: say so and close
         let lux = self
             .light
+            .borrow()
             .as_ref()
             .and_then(|l| l.cached_property("LightLevel"))
             .and_then(|v| v.get::<f64>())
@@ -2542,7 +2545,7 @@ impl App {
             if let Some(id) = a.transfers_wait.borrow_mut().take() {
                 p.disconnect(id);
             }
-            eprintln!("nebula: first preview frame");
+            eprintln!("nebula: first preview frame at {:.2}", up());
             if !a.st.borrow().asleep && a.transfers.borrow().is_none() {
                 a.start_transfers();
             }
@@ -2553,7 +2556,8 @@ impl App {
     // the photo transfer streams, beside the preview (done: Stage::Transferred); started after it
     fn start_transfers(self: &Rc<Self>) {
         let (done_tx, done_rx) = mpsc::channel();
-        match transfer::Transfers::start(done_tx) {
+        let pre = self.transfers_pre.borrow_mut().take();
+        match transfer::Transfers::start(done_tx, pre) {
             Ok(t) => *self.transfers.borrow_mut() = Some(t),
             Err(e) => {
                 self.show_status(&format!("no photo transfers: {e}"), 8);
@@ -3745,8 +3749,10 @@ impl App {
 }
 
 // iio-sensor-proxy's ambient light (lux), claimed for as long as the app runs
-fn light_proxy() -> Option<gtk::gio::DBusProxy> {
-    let proxy = gtk::gio::DBusProxy::for_bus_sync(
+// the ambient light sensor, claimed in the background (a blocking connect held the camera's start
+// for three quarters of a second); the app's `light` is filled in once the claim is made
+fn claim_light(slot: Rc<RefCell<Option<gtk::gio::DBusProxy>>>) {
+    gtk::gio::DBusProxy::for_bus(
         gtk::gio::BusType::System,
         gtk::gio::DBusProxyFlags::NONE,
         None,
@@ -3754,12 +3760,23 @@ fn light_proxy() -> Option<gtk::gio::DBusProxy> {
         "/net/hadess/SensorProxy",
         "net.hadess.SensorProxy",
         None::<&gtk::gio::Cancellable>,
-    )
-    .ok()?;
-    proxy
-        .call_sync("ClaimLight", None, gtk::gio::DBusCallFlags::NONE, 2000, None::<&gtk::gio::Cancellable>)
-        .ok()?;
-    Some(proxy)
+        move |proxy| {
+            let Ok(proxy) = proxy else { return };
+            let p = proxy.clone();
+            proxy.call(
+                "ClaimLight",
+                None,
+                gtk::gio::DBusCallFlags::NONE,
+                2000,
+                None::<&gtk::gio::Cancellable>,
+                move |r| {
+                    if r.is_ok() {
+                        *slot.borrow_mut() = Some(p);
+                    }
+                },
+            );
+        },
+    );
 }
 
 // Phosh's rotation lock (none without its schema)
@@ -4550,6 +4567,12 @@ fn build(gapp: &gtk::Application) {
     // the lens-blocked sensors, read while the preview runs (as the gyro)
     let blocked = Arc::new(AtomicU8::new(0));
     prox::spawn(gyro_on.clone(), blocked.clone());
+    let v_ccb = ccb::Ccb::open();
+    let v_light = Rc::new(RefCell::new(None));
+    claim_light(v_light.clone());
+    let v_accel = accel_proxy();
+    let v_cal = wb::Calibration::load();
+    let v_motor = haptics::Haptics::open();
     let app = Rc::new(App {
         st: RefCell::new(State {
             mode: Mode::Auto,
@@ -4632,7 +4655,7 @@ fn build(gapp: &gtk::Application) {
             settle: None,
             switching: None,
         }),
-        ccb: ccb::Ccb::open(),
+        ccb: v_ccb,
         focusing: Arc::new(AtomicBool::new(false)),
         stage_tx,
         stage_rx,
@@ -4645,8 +4668,8 @@ fn build(gapp: &gtk::Application) {
         moved: moved.clone(),
         blocked: blocked.clone(),
         status_box,
-        light: light_proxy(),
-        accel: accel_proxy(),
+        light: v_light,
+        accel: v_accel,
         quarter: Cell::new(0),
         pill_turn: pill_turn.clone(),
         pill_label: pill_label.clone(),
@@ -4674,6 +4697,7 @@ fn build(gapp: &gtk::Application) {
         hot_screen,
         transfers: RefCell::new(None),
         transfers_wait: RefCell::new(None),
+        transfers_pre: RefCell::new(None),
         transfer_turn: Arc::new(Mutex::new(())),
         pipeline,
         paintable,
@@ -4757,8 +4781,8 @@ fn build(gapp: &gtk::Application) {
         assist_btn,
         settings_nav: settings_nav.clone(),
         settings_pane: settings_pane.clone(),
-        cal: wb::Calibration::load(),
-        motor: haptics::Haptics::open(),
+        cal: v_cal,
+        motor: v_motor,
         photo_args: RefCell::new(HashMap::new()),
         settings_page,
         last_saved: RefCell::new(String::new()),
@@ -5134,7 +5158,12 @@ fn build(gapp: &gtk::Application) {
             c.set(ccb::METERING, st.metering as i32);
             c.set(ccb::ZOOM, 1000);
         }
+        eprintln!("nebula: starting the preview at {:.2}", up());
         a.start_preview();
+        // (their paths are not the preview's: made meanwhile; ASIC1's waits for its first frame)
+        if a.ccb.is_some() && !dev::demo() && a.transfers.borrow().is_none() {
+            *a.transfers_pre.borrow_mut() = Some(transfer::Transfers::prepare());
+        }
         a.apply_exposure();
         a.apply_wb();
         a.start_transfers_on_frame();
@@ -5365,7 +5394,14 @@ fn locked() -> bool {
     LOCKED.load(Ordering::Relaxed)
 }
 
+// seconds since the process started, for the startup log lines
+static T0: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+fn up() -> f64 {
+    T0.get_or_init(Instant::now).elapsed().as_secs_f64()
+}
+
 fn main() -> glib::ExitCode {
+    up();
     // the app's fonts, before GTK makes its font map
     fonts::install();
     // started from the app grid, the output went to the console: to a file instead
@@ -5388,7 +5424,7 @@ fn main() -> glib::ExitCode {
     if args.len() != std::env::args().count() {
         LOCKED.store(true, Ordering::Relaxed);
     }
-    eprintln!("nebula: started (pid {}{})", std::process::id(), if locked() { ", locked" } else { "" });
+    eprintln!("nebula: started (pid {}{}) at {:.2}", std::process::id(), if locked() { ", locked" } else { "" }, up());
     // GTK redraws the whole window each frame: redrawing only what changed (the preview)
     // left the badges over it as flickering black bars
     if std::env::var_os("GSK_DEBUG").is_none() {
@@ -5403,7 +5439,7 @@ fn main() -> glib::ExitCode {
     app.connect_activate(|app| {
         // logged: an activation while the app was closing (its streams stopping) left the
         // preview dead (2026-10-02)
-        eprintln!("nebula: activated (window {})", app.active_window().is_some());
+        eprintln!("nebula: activated (window {}) at {:.2}", app.active_window().is_some(), up());
         if CLOSING.load(Ordering::Relaxed) {
             // closing, its name given up: a launch now is a camera of its own
             return;

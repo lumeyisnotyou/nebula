@@ -42,6 +42,15 @@ impl Photo {
     }
 }
 
+// l16-shoot setup for the ASICs named (all of them with none)
+fn setup(asics: &[&str]) -> Result<(), String> {
+    let o = Command::new("l16-shoot").arg("setup").args(asics).output().map_err(|e| e.to_string())?;
+    if !o.status.success() {
+        return Err(String::from_utf8_lossy(&o.stderr).trim().to_string());
+    }
+    Ok(())
+}
+
 pub type Queue = Arc<Mutex<VecDeque<Photo>>>;
 
 pub struct Transfers {
@@ -53,11 +62,20 @@ impl Transfers {
     // links and formats the paths, starts the streams; @done gets each photo's directory
     // once all its records are in
     // done: a photo's directory once all its records are in, or the directory and what failed
-    pub fn start(done: mpsc::Sender<Result<PathBuf, (PathBuf, String)>>) -> Result<Transfers, String> {
-        let o = Command::new("l16-shoot").arg("setup").output().map_err(|e| e.to_string())?;
-        if !o.status.success() {
-            return Err(String::from_utf8_lossy(&o.stderr).trim().to_string());
+    //
+    // @prepared: ASIC2's and ASIC3's paths made beforehand (prepare), which leaves ASIC1's, the
+    // preview's CSID, for now; none: all three are made now
+    pub fn start(
+        done: mpsc::Sender<Result<PathBuf, (PathBuf, String)>>,
+        prepared: Option<thread::JoinHandle<Result<(), String>>>,
+    ) -> Result<Transfers, String> {
+        eprintln!("nebula: transfer setup begins at {:.2}", crate::up());
+        let others = prepared.is_some();
+        setup(if others { &["1"] } else { &[] })?;
+        if let Some(p) = prepared {
+            p.join().map_err(|_| "the setup of ASIC2 and ASIC3 panicked".to_string())??;
         }
+        eprintln!("nebula: transfer setup done at {:.2}", crate::up());
         let queue: Queue = Arc::new(Mutex::new(VecDeque::new()));
         let mut streams = Vec::new();
         for a in 0..3usize {
@@ -103,8 +121,14 @@ impl Transfers {
             });
             streams.push(child);
         }
-        eprintln!("nebula: transfers started");
+        eprintln!("nebula: transfers started at {:.2}", crate::up());
         Ok(Transfers { queue, streams })
+    }
+
+    // ASIC2's and ASIC3's paths do not touch the preview's: made while it starts, not after its
+    // first frame
+    pub fn prepare() -> thread::JoinHandle<Result<(), String>> {
+        thread::spawn(|| setup(&["2", "3"]))
     }
 
     pub fn stop(&mut self) {
