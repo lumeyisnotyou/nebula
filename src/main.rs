@@ -2329,7 +2329,12 @@ impl App {
                                 .filter(|p| p.exists())
                                 .collect();
                             raws.sort();
+                            let t = Instant::now();
                             let r = App::run(Command::new("l16-lri-assemble").args(&view).arg(&out).args(&raws));
+                            match &r {
+                                Ok(_) => eprintln!("nebula: saved {} in {:.2} s", out.display(), t.elapsed().as_secs_f64()),
+                                Err(e) => eprintln!("nebula: saving {} failed: {e}", out.display()),
+                            }
                             let _ = std::fs::remove_dir_all(&dir);
                             let _ = tx.send(Stage::Saved(r.map(|_| out)));
                         });
