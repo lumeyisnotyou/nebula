@@ -1573,7 +1573,53 @@ impl App {
     // portrait or landscape, from iio-sensor-proxy: the window's class turns the icons in
     // place ("spin"), the rotators re-lay their text out, the wheels turn their labels
     fn follow_orientation(&self, accel: &gtk::gio::DBusProxy) {
+        // (a test sets the hold itself: see dev::orientation_override)
+        if dev::orientation_override().is_some() {
+            return;
+        }
         let o = accel.cached_property("AccelerometerOrientation").and_then(|v| v.get::<String>());
+        self.follow_orientation_name(o);
+    }
+
+    // A test's controls (dev::take_commands): one command a line, in the order given.
+    //   orientation right-up|left-up|normal|bottom-up|clear   hold the camera so (clear: the sensor again)
+    //   zoom 28|35|70|150     mode auto|iso|shutter|manual     timer 0..4   burst 0|1   flash 0|1|2
+    //   iso 0..1   shutter 0..1   (the dials' positions: iso 0 is 3200 and 1 is 100; shutter 0 is 15 s and 1 is 1/8000)
+    //   press                 the shutter button
+    fn run_test_commands(self: &Rc<Self>) {
+        for line in dev::take_commands() {
+            let mut w = line.split_whitespace();
+            let (Some(cmd), arg) = (w.next(), w.next()) else { continue };
+            let num = arg.and_then(|a| a.parse::<f64>().ok());
+            eprintln!("nebula: test command: {line}");
+            match (cmd, arg, num) {
+                ("orientation", Some(o), _) => dev::set_orientation_override(Some(o.to_string()).filter(|o| o != "clear")),
+                ("zoom", _, Some(z)) => self.zoom_to(z),
+                ("mode", Some(m), _) => {
+                    if let Some(&m) = MODES.iter().find(|md| md.short() == m) {
+                        self.set_mode(m);
+                    }
+                }
+                ("timer", _, Some(k)) => self.choose(Opt::Timer, (k as usize).min(TIMERS.len() - 1)),
+                ("burst", _, Some(k)) => self.choose(Opt::Burst, (k as usize).min(BURSTS.len() - 1)),
+                ("flash", _, Some(k)) => self.choose(Opt::Flash, (k as usize).min(2)),
+                ("iso", _, Some(p)) => {
+                    self.st.borrow_mut().iso = p.clamp(0.0, 1.0);
+                    self.apply_exposure();
+                    self.refresh();
+                }
+                ("shutter", _, Some(p)) => {
+                    self.st.borrow_mut().shutter = p.clamp(0.0, 1.0);
+                    self.apply_exposure();
+                    self.refresh();
+                }
+                ("press", _, _) => self.shutter_pressed(),
+                _ => eprintln!("nebula: test command not understood: {line}"),
+            }
+        }
+    }
+
+    fn follow_orientation_name(&self, o: Option<String>) {
         let q = o.as_deref().and_then(quarter_for);
         if q.is_some_and(|q| q != self.quarter.get()) {
             eprintln!("nebula: orientation {o:?} -> quarter {q:?} (was {})", self.quarter.get());
@@ -2448,6 +2494,10 @@ impl App {
     }
 
     fn poll(self: &Rc<Self>) {
+        self.run_test_commands();
+        if let Some(o) = dev::orientation_override() {
+            self.follow_orientation_name(Some(o));
+        }
         let n = {
             let mut st = self.st.borrow_mut();
             st.polls = st.polls.wrapping_add(1);

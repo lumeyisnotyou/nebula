@@ -85,6 +85,29 @@ pub fn screenshot(window: &gtk::ApplicationWindow, path: &Path) {
     }
 }
 
+// A test's controls: commands, a line each, in $XDG_RUNTIME_DIR/nebula-test-cmd, taken (the file
+// removed) by the app's poll and run there (App::run_test_commands). Photos, zoom, mode and the
+// camera's hold can then be driven without a finger or a turn of the hand.
+pub fn take_commands() -> Vec<String> {
+    let path = glib::user_runtime_dir().join("nebula-test-cmd");
+    let Ok(text) = std::fs::read_to_string(&path) else { return Vec::new() };
+    let _ = std::fs::remove_file(&path);
+    text.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
+}
+
+// the hold a test asked for ("right-up", ...), over the accelerometer while it is set
+static ORIENTATION: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+pub fn orientation_override() -> Option<String> {
+    ORIENTATION.lock().ok().and_then(|o| o.clone())
+}
+
+pub fn set_orientation_override(o: Option<String>) {
+    if let Ok(mut g) = ORIENTATION.lock() {
+        *g = o;
+    }
+}
+
 pub fn hooks(window: &gtk::ApplicationWindow) {
     let w = window.clone();
     glib::unix_signal_add_local(libc::SIGUSR1, move || {
