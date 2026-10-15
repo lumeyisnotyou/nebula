@@ -2066,6 +2066,25 @@ impl App {
         };
         self.photo_args.borrow_mut().insert(dir.clone(), view);
         let tx = self.stage_tx.clone();
+        if dev::demo() {
+            // no driver on this machine: the request as the driver and the assembler would get it, in
+            // the log (the pipeline test reads it), and the photos "saved" as notes in $L16_DEMO_OUT
+            let view = self.photo_args.borrow_mut().remove(&dir).unwrap_or_default();
+            eprintln!("nebula: demo capture: mask={mask:#x} burst={burst} flags={flags} zoom={zoom:.0} args={}", view.join(" "));
+            let out = std::env::var_os("L16_DEMO_OUT").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(250));
+                let _ = tx.send(Stage::Captured(Ok(dir.clone())));
+                for frame in 0..burst {
+                    thread::sleep(Duration::from_millis(250));
+                    let note = out.join(format!("demo-{stamp}-{seq}-{frame}.txt"));
+                    let _ = std::fs::write(&note, view.join(" "));
+                    eprintln!("nebula: saved {} in 0.00 s", note.display());
+                    let _ = tx.send(Stage::Saved(Ok(note)));
+                }
+            });
+            return;
+        }
         let turn = self.transfer_turn.clone();
         let Some(queue) = self.transfers.borrow().as_ref().map(|t| t.queue.clone()) else {
             self.st.borrow_mut().busy = false;
