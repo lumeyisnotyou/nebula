@@ -591,6 +591,8 @@ struct App {
     // (-1, 0, 1; as stock, none upside down) and what turns with it re-laid out
     accel: Option<gtk::gio::DBusProxy>,
     quarter: Cell<i32>,
+    // held upside down (the other landscape): photos turn half, the UI stays as the compositor draws it
+    upside_down: Cell<bool>,
     // the status line, at the preview's top edge as the camera is held (place_status), and
     // the overheating warning at its bottom edge
     // the notices at the top of the screen: a small pill (icon and title) and an alert (icon, title
@@ -616,7 +618,6 @@ struct App {
     // in front: the screen kept on (an idle inhibitor's cookie) and the display held in
     // landscape (the rotation lock and transform it had, given back after)
     idle_cookie: Cell<u32>,
-    landscape_held: RefCell<Option<(bool, Option<String>)>>,
     rotators: Vec<Rotator>,
     geo: RefCell<geo::Geo>,
     storage_label: gtk::Label,
@@ -1577,6 +1578,11 @@ impl App {
         if q.is_some_and(|q| q != self.quarter.get()) {
             eprintln!("nebula: orientation {o:?} -> quarter {q:?} (was {})", self.quarter.get());
         }
+        if let Some(u) = o.as_deref().and_then(upside_down_for) {
+            if self.upside_down.replace(u) != u {
+                eprintln!("nebula: upside down: {u}");
+            }
+        }
         let Some(q) = q else { return };
         self.apply_quarter(q);
     }
@@ -2002,10 +2008,8 @@ impl App {
                 v.push("--wb".into());
                 v.push(format!("{r},{b}"));
             }
-            match self.quarter.get() {
-                -1 => v.extend(["--orientation".into(), "1".into()]),
-                1 => v.extend(["--orientation".into(), "2".into()]),
-                _ => {}
+            if let Some(o) = photo_orientation(self.quarter.get(), self.upside_down.get()) {
+                v.extend(["--orientation".into(), o.to_string()]);
             }
             if let Some(f) = st.geotag.then(|| self.geo.borrow().fix()).flatten() {
                 let alt = f.altitude.map_or("nan".to_string(), |a| a.to_string());
@@ -2677,9 +2681,9 @@ impl App {
     }
 
     // In front, as stock's camera: the screen stays on (only the in-pocket check or the power
-    // button turns it off), and the display stays landscape even with the rotation lock off
-    // (stock's activity is locked to landscape; the UI's elements turn instead). The lock
-    // and the transform it had are given back when the camera leaves the front or closes.
+    // button turns it off). The view stays landscape while the shell rotates (stock's activity is
+    // locked to landscape; the UI's elements turn instead): phoc pins it, from
+    // X-Phosh-Orientation=landscape in the desktop file.
     fn hold_front(&self, front: bool) {
         let Some(window) = self.view.root().and_downcast::<gtk::Window>() else { return };
         let Some(app) = window.application() else { return };
@@ -2690,35 +2694,6 @@ impl App {
             app.uninhibit(self.idle_cookie.replace(0));
             front_marker(false);
         }
-        let held = self.landscape_held.borrow().is_some();
-        if front && !held {
-            let Some(lock) = rotation_lock() else { return };
-            let was = lock.boolean("orientation-lock");
-            let transform = display_transform();
-            let _ = lock.set_boolean("orientation-lock", true);
-            if transform.as_deref() != Some("270") {
-                set_display_transform("270");
-            }
-            eprintln!("nebula: display held in landscape (was lock {was}, transform {transform:?})");
-            *self.landscape_held.borrow_mut() = Some((was, transform));
-        } else if !front && held {
-            self.release_landscape();
-        }
-    }
-
-    fn release_landscape(&self) {
-        front_marker(false);
-        let Some((was, transform)) = self.landscape_held.borrow_mut().take() else { return };
-        if was {
-            // locked before: as it was locked
-            if let Some(t) = transform.filter(|t| t != "270") {
-                set_display_transform(&t);
-            }
-        }
-        if let Some(lock) = rotation_lock() {
-            let _ = lock.set_boolean("orientation-lock", was);
-        }
-        eprintln!("nebula: display given back (lock {was})");
     }
 
     // AF-D as stock's app runs it (SmartAFTriggerMgr; there is no ASIC mode for stills): the
@@ -3781,27 +3756,6 @@ fn claim_light(slot: Rc<RefCell<Option<gtk::gio::DBusProxy>>>) {
     );
 }
 
-// Phosh's rotation lock (none without its schema)
-fn rotation_lock() -> Option<gtk::gio::Settings> {
-    let id = "org.gnome.settings-daemon.peripherals.touchscreen";
-    gtk::gio::SettingsSchemaSource::default()?.lookup(id, true)?;
-    Some(gtk::gio::Settings::new(id))
-}
-
-// the display's transform (wlr-randr's "Transform:"; the L16's panel, DSI-1), and setting
-// it, as light-lfc-rotate does: 270 is landscape, the camera held as a camera
-fn display_transform() -> Option<String> {
-    let out = Command::new("wlr-randr").output().ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    text.lines().find_map(|l| l.trim().strip_prefix("Transform:").map(|t| t.trim().to_string()))
-}
-
-fn set_display_transform(t: &str) {
-    if let Err(e) = Command::new("wlr-randr").args(["--output", "DSI-1", "--transform", t]).status() {
-        eprintln!("nebula: display transform: {e}");
-    }
-}
-
 // the screen off, as the power button turns it off (Phosh's screensaver)
 fn blank_screen() {
     let Ok(bus) = gtk::gio::bus_get_sync(gtk::gio::BusType::Session, None::<&gtk::gio::Cancellable>) else {
@@ -3852,6 +3806,28 @@ fn quarter_for(orientation: &str) -> Option<i32> {
         "right-up" | "left-up" => Some(0),
         "normal" => Some(-1),
         "bottom-up" => Some(1),
+        _ => None,
+    }
+}
+
+// whether the camera is held upside down (landscape the other way up): phosh's rotation manager maps
+// right-up to its transform 270, the L16 held as a camera, and left-up to 90. None: lying flat or
+// unknown (keep the last)
+fn upside_down_for(orientation: &str) -> Option<bool> {
+    match orientation {
+        "left-up" => Some(true),
+        "right-up" | "normal" | "bottom-up" => Some(false),
+        _ => None,
+    }
+}
+
+// the LRI's orientation for a photo taken in this hold (ViewPreferences.Orientation: 1 a quarter
+// clockwise, 2 a quarter counter-clockwise, 7 half a turn; none: as taken)
+fn photo_orientation(quarter: i32, upside_down: bool) -> Option<u8> {
+    match quarter {
+        -1 => Some(1),
+        1 => Some(2),
+        _ if upside_down => Some(7),
         _ => None,
     }
 }
@@ -4673,6 +4649,7 @@ fn build(gapp: &gtk::Application) {
         light: v_light,
         accel: v_accel,
         quarter: Cell::new(0),
+        upside_down: Cell::new(false),
         pill_turn: pill_turn.clone(),
         pill_label: pill_label.clone(),
         pill_timer: RefCell::new(None),
@@ -4690,7 +4667,6 @@ fn build(gapp: &gtk::Application) {
         thermal_turn: thermal_turn.clone(),
         zoom_chips: zoom_chips.clone(),
         idle_cookie: Cell::new(0),
-        landscape_held: RefCell::new(None),
         rotators,
         geo: RefCell::new(geo::Geo::default()),
         storage_label,
@@ -5064,7 +5040,7 @@ fn build(gapp: &gtk::Application) {
     window.connect_close_request(move |w| {
         eprintln!("nebula: window closed");
         CLOSING.store(true, Ordering::Relaxed);
-        a.release_landscape();
+        front_marker(false);
         w.set_visible(false);
         // the app's name on the session bus given up now: a launch while the streams stop
         // (about 3 s) was handed to this instance, which then quit, and nothing opened. Now
@@ -5492,5 +5468,44 @@ mod capture_flag_tests {
     fn bursts_are_always_quick() {
         assert_eq!(capture_flags(Mode::Auto, 800, 3, true, true), QUICK);
         assert_eq!(capture_flags(Mode::Manual, 100, 3, true, true), QUICK);
+    }
+}
+
+#[cfg(test)]
+mod orientation_tests {
+    use super::*;
+
+    #[test]
+    fn held_as_a_camera_the_photo_is_as_taken() {
+        assert_eq!(photo_orientation(0, false), None);
+    }
+
+    #[test]
+    fn held_upside_down_the_photo_turns_half() {
+        assert_eq!(photo_orientation(0, true), Some(7));
+    }
+
+    #[test]
+    fn portrait_turns_a_quarter_either_way() {
+        // shutter down ("normal", quarter -1): clockwise to be upright; shutter up: counter-clockwise
+        assert_eq!(photo_orientation(-1, false), Some(1));
+        assert_eq!(photo_orientation(1, false), Some(2));
+    }
+
+    #[test]
+    fn the_upside_down_flag_means_nothing_in_portrait() {
+        assert_eq!(photo_orientation(-1, true), Some(1));
+        assert_eq!(photo_orientation(1, true), Some(2));
+    }
+
+    #[test]
+    fn the_sensor_names_map_to_a_hold() {
+        // right-up is the normal camera hold (phosh's transform 270); left-up is the other landscape
+        assert_eq!(upside_down_for("right-up"), Some(false));
+        assert_eq!(upside_down_for("left-up"), Some(true));
+        assert_eq!(upside_down_for("normal"), Some(false));
+        assert_eq!(upside_down_for("bottom-up"), Some(false));
+        assert_eq!(upside_down_for("undefined"), None);
+        assert_eq!(upside_down_for("face-up"), None);
     }
 }
