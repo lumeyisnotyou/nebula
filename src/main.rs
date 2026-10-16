@@ -5202,15 +5202,23 @@ fn build(gapp: &gtk::Application) {
                 }
             }
         }
-        if let Some(c) = &a.ccb {
-            let st = a.st.borrow();
-            c.set(ccb::MODULE, 0);
+        if a.ccb.is_some() {
+            let (flash, metering) = {
+                let st = a.st.borrow();
+                (st.flash as i32, st.metering as i32)
+            };
             // the photos are dated in local time, as stock's (the driver's SET_TIME at each start)
             let offset = glib::DateTime::now_local().map_or(0, |d| (d.utc_offset().as_seconds()) as i32);
-            c.set(ccb::UTC_OFFSET, offset);
-            c.set(ccb::FLASH, st.flash as i32);
-            c.set(ccb::METERING, st.metering as i32);
-            c.set(ccb::ZOOM, 1000);
+            // (off the UI thread: the zoom waits for the driver's lock, which the ASICs' boot holds)
+            thread::spawn(move || {
+                if let Some(c) = ccb::Ccb::open() {
+                    c.set(ccb::MODULE, 0);
+                    c.set(ccb::UTC_OFFSET, offset);
+                    c.set(ccb::FLASH, flash);
+                    c.set(ccb::METERING, metering);
+                    c.set(ccb::ZOOM, 1000);
+                }
+            });
         }
         eprintln!("nebula: starting the preview at {:.2}", up());
         a.start_preview();
@@ -5483,6 +5491,17 @@ fn main() -> glib::ExitCode {
     // left the badges over it as flickering black bars
     if std::env::var_os("GSK_DEBUG").is_none() {
         std::env::set_var("GSK_DEBUG", "full-redraw");
+    }
+    // the ASICs take about 2.5 s to boot, and the preview waits for them: start that now, while
+    // GTK and the window are made (not when the last camera is still closing: start() then)
+    if !dev::demo() && take_camera() {
+        thread::spawn(|| {
+            if let Some(c) = ccb::Ccb::open() {
+                eprintln!("nebula: powering up the ASICs at {:.2}", up());
+                c.power_up();
+                eprintln!("nebula: the ASICs are up at {:.2}", up());
+            }
+        });
     }
     gst::init().expect("gstreamer");
     // locked: a process of its own, never a hand-over to a running camera (that one has the

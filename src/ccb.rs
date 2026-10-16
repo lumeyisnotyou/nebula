@@ -55,6 +55,9 @@ pub struct Capture {
 pub const CAPTURE_NO_PRECAPTURE: u8 = 1; // the preview's exposure as it is
 pub const CAPTURE_NO_STACK: u8 = 2; // one frame per module
 
+// LIGHT_CCB_IOC_SEND: struct light_ccb_msg is a u16 length and 128 bytes
+const IOC_SEND: u64 = 1 << 30 | 130 << 16 | (b'L' as u64) << 8 | 1;
+
 const IOC_CAPTURE: u64 = 3 << 30 | 40 << 16 | (b'L' as u64) << 8 | 5;
 const IOC_TRANSFER: u64 = 1 << 30 | 4 << 16 | (b'L' as u64) << 8 | 6;
 
@@ -78,6 +81,14 @@ impl Ccb {
             }
         }
         None
+    }
+
+    // Power the ASICs up and boot them (about 2.5 s of it: the enables a second apart), without
+    // starting the preview: the driver does that for any message to them, and refuses this one
+    // (no message) once they are up. Started with the app, the boot goes on while the window is made.
+    pub fn power_up(&self) {
+        let mut msg = [0u8; 130];
+        unsafe { libc::ioctl(self.file.as_raw_fd(), IOC_SEND as _, msg.as_mut_ptr()) };
     }
 
     pub fn get(&self, id: u32) -> Option<i32> {
