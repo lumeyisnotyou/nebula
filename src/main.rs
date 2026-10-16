@@ -2054,6 +2054,8 @@ impl App {
                 v.push("--wb".into());
                 v.push(format!("{r},{b}"));
             }
+            // the framing: the photo's crop, so a renderer shows what the preview showed
+            v.extend(["--zoom".into(), format!("{:.1}", st.zoom)]);
             if let Some(o) = photo_orientation(self.quarter.get(), self.upside_down.get()) {
                 v.extend(["--orientation".into(), o.to_string()]);
             }
