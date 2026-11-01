@@ -193,6 +193,9 @@ def case_shots(app, res):
                 got = float(req["args"].get("exposure-us", 0))
                 if not math.isclose(got, want, rel_tol=0.02):
                     problems.append(f"exposure {got:.0f} us, expected {want:.0f}")
+            # the photo carries its framing: the zoom as the assembler's crop
+            if abs(float(req["args"].get("zoom", 0)) - mm) > 0.1:
+                problems.append(f"zoom {req['args'].get('zoom')}, expected {mm}")
             res.add("shots", label, not problems, "; ".join(problems) or f"mask {req['mask']:#x}")
             app.wait(r"nebula: saved", 5)
     app.cmd("mode auto", "zoom 28")
